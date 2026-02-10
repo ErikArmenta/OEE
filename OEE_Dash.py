@@ -78,27 +78,27 @@ db = init_connection()
 # --- FUNCIONES DE CÁLCULO (BACKEND LOGIC) ---
 def calculate_metrics(tiempo_programado, rate_teorico, producido, rechazos,
                      setup, f_mec, f_elec, f_cham, ajuste, f_mat):
-    
+
     # 1. Tiempo Muerto (Suma de fallas)
     tiempo_muerto = setup + f_mec + f_elec + f_cham + ajuste + f_mat
-    
+
     # 2. Tiempo Funcionamiento
     tiempo_funcionamiento = max(0, tiempo_programado - tiempo_muerto)
-    
+
     # 3. Disponibilidad: (Tiempo Programado - Tiempo Muerto) / Tiempo Programado
     disponibilidad = (tiempo_funcionamiento / tiempo_programado) if tiempo_programado > 0 else 0
-    
+
     # 4. Rendimiento: Unidades Producidas / (Tiempo Funcionamiento * Rate Teórico)
     # Note: Rate Teórico is typically units/minute.
     capacidad_teorica = tiempo_funcionamiento * rate_teorico
     rendimiento = (producido / capacidad_teorica) if capacidad_teorica > 0 else 0
-    
+
     # 5. Calidad: (Unidades Producidas - Rechazos) / Unidades Producidas
     calidad = ((producido - rechazos) / producido) if producido > 0 else 0
-    
+
     # 6. OEE
     oee = disponibilidad * rendimiento * calidad
-    
+
     return {
         "tiempo_muerto": tiempo_muerto,
         "tiempo_funcionamiento": tiempo_funcionamiento,
@@ -114,22 +114,22 @@ with st.sidebar:
         st.image("EA_2.png", width=200)
     except:
         st.title("EA System")
-    
+
     st.markdown("### ⚙️ Configuración Global")
-    
+
     # Meta OEE Slider
     meta_oee = st.number_input("🎯 Meta OEE (%)", min_value=0.0, max_value=100.0, value=85.0, step=1.0)
-    
+
     # Filtros Globales (Afectan Dashboard y Reportes)
-    filter_date_range = st.date_input("📅 Rango de Fechas", 
+    filter_date_range = st.date_input("📅 Rango de Fechas",
                                     [date.today() - timedelta(days=30), date.today()])
-    
+
     # Líneas disponibles (SL001 - SL033)
     lineas_opts = [f"SL{str(i).zfill(3)}" for i in range(1, 34)]
     filter_line = st.multiselect("🏭 Líneas", lineas_opts, default=lineas_opts[:5])
-    
+
     filter_turn = st.multiselect("⏰ Turno", ["Mañana", "Tarde", "Noche"], default=["Mañana", "Tarde", "Noche"])
-    
+
     st.markdown("---")
     st.markdown("**Master Engineer Erik Armenta**")
 
@@ -151,7 +151,7 @@ def make_donut(input_response, input_text, input_color):
         chart_color = ['#F39C12', '#875A12']
     if input_color == 'red':
         chart_color = ['#E74C3C', '#78281F']
-    
+
     source = pd.DataFrame({
         "Topic": ['', input_text],
         "% value": [100-input_response, input_response]
@@ -160,7 +160,7 @@ def make_donut(input_response, input_text, input_color):
         "Topic": ['', input_text],
         "% value": [100, 0]
     })
-    
+
     plot = alt.Chart(source).mark_arc(innerRadius=45, cornerRadius=25).encode(
         theta="% value",
         color= alt.Color("Topic:N",
@@ -169,8 +169,8 @@ def make_donut(input_response, input_text, input_color):
                             range=chart_color),
                         legend=None),
     ).properties(width=130, height=130)
-    
-    text = plot.mark_text(align='center', color="#29b5e8", font="Lato", fontSize=32, fontWeight=700, fontStyle="italic").encode(text=alt.value(f'{input_response:.1f}%'))
+
+    text = plot.mark_text(align='center', color="#29b5e8", font="Lato", fontSize=32, fontWeight=700, fontStyle="italic").encode(text=alt.value(f'{input_response:.2f}%'))
     plot_bg = alt.Chart(source_bg).mark_arc(innerRadius=45, cornerRadius=20).encode(
         theta="% value",
         color= alt.Color("Topic:N",
@@ -183,7 +183,7 @@ def make_donut(input_response, input_text, input_color):
 
 with tab1:
     st.title("📊 Dashboard OEE en Tiempo Real")
-    
+
     if not db:
         st.error("⚠️ Error de conexión: No se encontraron credenciales de Supabase en 'secrets.toml'.")
         st.info("Por favor configura [supabase] url y key.")
@@ -192,122 +192,144 @@ with tab1:
         if len(filter_date_range) == 2:
             start_d, end_d = filter_date_range
             raw_df = db.fetch_records(start_d, end_d)
-            
+
             if not raw_df.empty:
                 # Apply Filters
                 df = raw_df[
-                    (raw_df['linea'].isin(filter_line)) & 
+                    (raw_df['linea'].isin(filter_line)) &
                     (raw_df['turno'].isin(filter_turn))
                 ]
-                
+
                 if not df.empty:
-                    # KPIs Globales
-                    kpi_oee = df['oee'].mean()
-                    kpi_disp = df['disponibilidad'].mean()
-                    kpi_perf = df['rendimiento'].mean()
-                    kpi_qual = df['calidad'].mean()
-                    
+                    # --- NUEVA LÓGICA CORRECTA PARA KPI GLOBALES (CÁLCULO HORIZONTAL) ---
+                    total_tiempo_prog = df['tiempo_programado_min'].sum()
+                    total_tiempo_muerto = df['tiempo_muerto'].sum()
+                    total_producido = df['producido'].sum()
+
+                    # Para el esperado, sumamos la capacidad teórica de cada registro individualmente
+                    total_esperado = (df['tiempo_funcionamiento'] * df['rate_teorico']).sum()
+                    total_rechazos = df['rechazos_fugas'].sum()
+
+                    # Calculamos componentes globales
+                    disp_g = ((total_tiempo_prog - total_tiempo_muerto) / total_tiempo_prog) if total_tiempo_prog > 0 else 0
+                    perf_g = (total_producido / total_esperado) if total_esperado > 0 else 0
+                    qual_g = ((total_producido - total_rechazos) / total_producido) if total_producido > 0 else 0
+
+                    # Asignación a variables para las donas y métricas
+                    kpi_oee = (disp_g * perf_g * qual_g) * 100
+                    kpi_disp = disp_g * 100
+                    kpi_perf = perf_g * 100
+                    kpi_qual = qual_g * 100
+
                     st.markdown("### Indicadores Clave de Rendimiento (KPIs)")
                     col1, col2, col3, col4 = st.columns(4)
-                    
-                    # Altair Donut Charts
+
                     with col1:
                         st.altair_chart(make_donut(kpi_oee, 'OEE', 'blue'), use_container_width=True)
-                        st.metric("OEE Global", f"{kpi_oee:.1f}%", delta=f"{kpi_oee-meta_oee:.1f}% vs Meta")
+                        st.metric("OEE Global", f"{kpi_oee:.2f}%", delta=f"{kpi_oee-meta_oee:.2f}% vs Meta")
                     with col2:
                         st.altair_chart(make_donut(kpi_disp, 'Disponibilidad', 'green'), use_container_width=True)
-                        st.metric("Disponibilidad", f"{kpi_disp:.1f}%")
+                        st.metric("Disponibilidad", f"{kpi_disp:.2f}%")
                     with col3:
                         st.altair_chart(make_donut(kpi_perf, 'Rendimiento', 'orange'), use_container_width=True)
-                        st.metric("Eficiencia / Rendimiento", f"{kpi_perf:.1f}%")
+                        st.metric("Eficiencia / Rendimiento", f"{kpi_perf:.2f}%")
                     with col4:
                         st.altair_chart(make_donut(kpi_qual, 'Calidad', 'red'), use_container_width=True)
-                        st.metric("Calidad (FTT)", f"{kpi_qual:.1f}%")
-                    
+                        st.metric("Calidad (FTT)", f"{kpi_qual:.2f}%")
+
                     st.markdown("---")
-                    
-                    # Gráficos de Tendencia (Diaria y Mensual)
+
+                    # --- FUNCIÓN INTERNA PARA CÁLCULO HORIZONTAL EN GRÁFICAS ---
+                    def calc_h_metrics(x):
+                        tp = x['tiempo_programado_min'].sum()
+                        tm = x['tiempo_muerto'].sum()
+                        prod = x['producido'].sum()
+                        esp = (x['tiempo_funcionamiento'] * x['rate_teorico']).sum()
+                        rech = x['rechazos_fugas'].sum()
+                        d = (tp - tm) / tp if tp > 0 else 0
+                        p = prod / esp if esp > 0 else 0
+                        q = (prod - rech) / prod if prod > 0 else 0
+                        return pd.Series({'oee': (d*p*q)*100, 'disp': d*100, 'perf': p*100, 'qual': q*100})
+
+                    # Gráficos de Tendencia
                     c1, c2 = st.columns(2)
-                    
+
                     with c1:
-                        # Tendencia Diaria OEE
-                        df_daily = df.groupby('fecha')['oee'].mean().reset_index()
-                        fig_trend = px.line(df_daily, x='fecha', y='oee', markers=True, 
-                                          title="Tendencia OEE Diaria", template="plotly_dark")
+                        # Tendencia Diaria (Agrupada horizontalmente)
+                        df_daily = df.groupby('fecha').apply(calc_h_metrics, include_groups=False).reset_index()
+                        fig_trend = px.line(df_daily, x='fecha', y='oee', markers=True,
+                                          title="Tendencia OEE Diaria (Cálculo Real)", template="plotly_dark")
                         fig_trend.add_hline(y=meta_oee, line_dash="dash", line_color="green", annotation_text=f"Meta {meta_oee}%")
                         st.plotly_chart(fig_trend, use_container_width=True)
 
                     with c2:
-                        # Tendencia Mensual OEE
-                        # Convertir fecha to month-year for grouping
+                        # Tendencia Mensual (Agrupada horizontalmente)
                         df['mes'] = pd.to_datetime(df['fecha']).dt.strftime('%Y-%m')
-                        df_monthly = df.groupby('mes')['oee'].mean().reset_index()
-                        fig_month = px.bar(df_monthly, x='mes', y='oee', 
-                                         title="Tendencia OEE Mensual", template="plotly_dark",
+                        df_monthly = df.groupby('mes').apply(calc_h_metrics, include_groups=False).reset_index()
+                        fig_month = px.bar(df_monthly, x='mes', y='oee',
+                                         title="Tendencia OEE Mensual (Cálculo Real)", template="plotly_dark",
                                          color='oee', color_continuous_scale='Blues')
                         fig_month.add_hline(y=meta_oee, line_dash="dash", line_color="green", annotation_text=f"Meta {meta_oee}%")
                         st.plotly_chart(fig_month, use_container_width=True)
 
                     # Pareto y Desglose
                     c3, c4 = st.columns(2)
-                        
+
                     with c3:
-                        # Pareto de Fallas (Tiempo Muerto)
-                        failure_cols = ['setup_excesivo', 'falla_mecanica', 'falla_electrica', 
+                        failure_cols = ['setup_excesivo', 'falla_mecanica', 'falla_electrica',
                                       'falla_chamber', 'ajuste_no_programado', 'falta_material']
                         failures = df[failure_cols].sum().sort_values(ascending=False).reset_index()
                         failures.columns = ['Falla', 'Minutos']
                         failures['Acumulado'] = failures['Minutos'].cumsum() / failures['Minutos'].sum() * 100
-                        
                         fig_pareto = make_subplots(specs=[[{"secondary_y": True}]])
                         fig_pareto.add_trace(go.Bar(x=failures['Falla'], y=failures['Minutos'], name="Minutos", marker_color="#ef4444"), secondary_y=False)
                         fig_pareto.add_trace(go.Scatter(x=failures['Falla'], y=failures['Acumulado'], name="% Acumulado", marker_color="#3b82f6"), secondary_y=True)
                         fig_pareto.update_layout(title="Pareto de Tiempo Muerto (Minutos)", template="plotly_dark")
                         st.plotly_chart(fig_pareto, use_container_width=True)
-                    
+
                     with c4:
-                        # OEE Por Línea
-                        df_line = df.groupby('linea')[['oee', 'disponibilidad', 'rendimiento', 'calidad']].mean().reset_index()
-                        fig_bar = px.bar(df_line, x='linea', y=['disponibilidad', 'rendimiento', 'calidad'], 
-                                    title="Desglose OEE por Línea", barmode='group', template="plotly_dark")
+                        # Desglose OEE por Línea (Agrupado horizontalmente)
+                        df_line = df.groupby('linea').apply(calc_h_metrics, include_groups=False).reset_index()
+                        fig_bar = px.bar(df_line, x='linea', y=['disp', 'perf', 'qual'],
+                                    title="Desglose OEE por Línea (Cálculo Real)", barmode='group',
+                                    template="plotly_dark", labels={'value': 'Porcentaje (%)', 'variable': 'KPI'})
                         st.plotly_chart(fig_bar, use_container_width=True)
-                    
+
                 else:
                     st.warning("No hay datos para los filtros seleccionados.")
             else:
                 st.info("No se encontraron registros en el rango de fechas seleccionado.")
         else:
             st.info("Seleccione un rango de fechas válido.")
-
 # -----------------------------------------------------------------------------
 # TAB 2: CAPTURA DE DATOS
 # -----------------------------------------------------------------------------
 with tab2:
     st.header("📝 Nuevo Registro OEE")
     st.markdown("Celdas naranjas del formato Excel original.")
-    
+
     if not db:
         st.warning("⚠️ Base de datos no conectada. No se podran guardar registros.")
-        
+
     with st.form("oee_form", clear_on_submit=True):
         col1, col2, col3, col4 = st.columns(4)
-        
+
         with col1:
             f_fecha = st.date_input("Fecha", date.today())
             f_linea = st.selectbox("Línea", lineas_opts)
-            
+
         with col2:
             f_turno = st.selectbox("Turno", ["Mañana", "Tarde", "Noche"])
             f_modelo = st.text_input("Modelo/Parte")
-            
+
         with col3:
             f_tiempo_prog = st.number_input("Tiempo Programado (min)", min_value=0, value=480, help="Tiempo Total del Turno")
             f_rate = st.number_input("Rate Teórico/Eficiencia (u/min)", min_value=0.0, value=1.0, format="%.2f")
-            
+
         with col4:
             f_producido = st.number_input("Total Producido", min_value=0)
             f_rechazos = st.number_input("Scrap / Rechazos (Cantidad)", min_value=0, help="Cantidad de piezas SCRAP")
-            
+
         st.markdown("#### 🛑 Tiempos Muertos (Minutos)")
         c1, c2, c3, c4, c5, c6 = st.columns(6)
         with c1: f_setup = st.number_input("Setup Excesivo", min_value=0)
@@ -316,14 +338,14 @@ with tab2:
         with c4: f_cham = st.number_input("Falla Chamber", min_value=0)
         with c5: f_ajuste = st.number_input("Ajuste No Prog.", min_value=0)
         with c6: f_mat = st.number_input("Falta Material", min_value=0)
-        
+
         submitted = st.form_submit_button("💾 Guardar Registro", type="primary")
-        
+
         if submitted:
             # Calcular Métricas
             metrics = calculate_metrics(f_tiempo_prog, f_rate, f_producido, f_rechazos,
                                      f_setup, f_mec, f_elec, f_cham, f_ajuste, f_mat)
-            
+
             # Preparar Payload
             payload = {
                 "fecha": f_fecha.isoformat(),
@@ -342,12 +364,12 @@ with tab2:
                 "falta_material": f_mat,
                 "tiempo_muerto": metrics["tiempo_muerto"],
                 "tiempo_funcionamiento": metrics["tiempo_funcionamiento"],
-                "disponibilidad": metrics["disponibilidad"], 
+                "disponibilidad": metrics["disponibilidad"],
                 "rendimiento": metrics["rendimiento"],
                 "calidad": metrics["calidad"],
                 "oee": metrics["oee"]
             }
-            
+
             if db:
                 res = db.insert_record(payload)
                 if res:
@@ -366,11 +388,11 @@ with tab2:
 def aplicar_semaforo(val):
     """Aplica colores RGB basados en el rendimiento OEE/Rendimiento"""
     if val < 70:
-        color = '#ef4444' # Rojo 
+        color = '#ef4444' # Rojo
     elif val < 85:
-        color = '#f59e0b' # Amarillo 
+        color = '#f59e0b' # Amarillo
     else:
-        color = '#10b981' # Verde 
+        color = '#10b981' # Verde
     return f'background-color: {color}; color: white; font-weight: bold'
 
 import base64
@@ -385,64 +407,74 @@ def get_image_base64(path):
 
 with tab3:
     st.markdown("<h2 style='text-align: center;'>📄 Generador de Reportes Interactivos</h2>", unsafe_allow_html=True)
-    
+
     if db and len(filter_date_range) == 2:
         start_d, end_d = filter_date_range
-        # Fetching data for reports
         raw_df_rep = db.fetch_records(start_d, end_d)
-        
+
         if not raw_df_rep.empty:
             df_rep = raw_df_rep[
-                (raw_df_rep['linea'].isin(filter_line)) & 
+                (raw_df_rep['linea'].isin(filter_line)) &
                 (raw_df_rep['turno'].isin(filter_turn))
             ]
-            
-            if not df_rep.empty:
-                # 1. Crear Tabla de Resumen (Hoja de Cálculos)
-                pivot = df_rep.pivot_table(
-                    index=['linea'], 
-                    values=['oee', 'disponibilidad', 'rendimiento', 'calidad'], 
-                    aggfunc='mean'
-                ).round(2)
 
-                # Aplicar Estilo de Semáforo para visualización en Streamlit
-                st.subheader("Vista Previa de Rendimiento")
+            if not df_rep.empty:
+                # --- FUNCIÓN DE APOYO PARA CÁLCULO HORIZONTAL ---
+                def calc_report_metrics(x):
+                    tp = x['tiempo_programado_min'].sum()
+                    tm = x['tiempo_muerto'].sum()
+                    prod = x['producido'].sum()
+                    esp = (x['tiempo_funcionamiento'] * x['rate_teorico']).sum()
+                    rech = x['rechazos_fugas'].sum()
+                    d = (tp - tm) / tp if tp > 0 else 0
+                    p = prod / esp if esp > 0 else 0
+                    q = (prod - rech) / prod if prod > 0 else 0
+                    return pd.Series({
+                        'oee': round((d*p*q)*100, 2),
+                        'disponibilidad': round(d*100, 2),
+                        'rendimiento': round(p*100, 2),
+                        'calidad': round(q*100, 2)
+                    })
+
+                # 1. Crear Tabla de Resumen (Cálculo Horizontal en lugar de pivot_table mean)
+                pivot = df_rep.groupby('linea').apply(calc_report_metrics, include_groups=False)
+
+                # Aplicar Estilo de Semáforo
+                st.subheader("Vista Previa de Rendimiento (Totales Reales)")
                 try:
                     styled_pivot = pivot.style.map(aplicar_semaforo, subset=['oee', 'rendimiento'])
                 except:
                     styled_pivot = pivot.style.applymap(aplicar_semaforo, subset=['oee', 'rendimiento'])
-                    
+
                 st.dataframe(styled_pivot, use_container_width=True)
 
                 # 2. GENERACIÓN DE GRÁFICOS PARA EL REPORTE
-                # Grafico 1: Barras OEE (Hoja 1)
-                fig_html_bar = px.bar(pivot.reset_index(), x='linea', y='oee', 
-                                 color='oee', color_continuous_scale='RdYlGn',
-                                 title="Análisis Comparativo por Línea", template="plotly_dark")
-                
-                # Grafico 2: Tendencia (Hoja 2)
-                df_daily_rep = df_rep.groupby('fecha')['oee'].mean().reset_index()
-                fig_html_trend = px.line(df_daily_rep, x='fecha', y='oee', markers=True, 
-                                  title="Tendencia OEE Diaria", template="plotly_dark")
+                # Grafico 1: Barras OEE por Línea (Basado en el cálculo horizontal anterior)
+                fig_html_bar = px.bar(pivot.reset_index(), x='linea', y='oee',
+                                     color='oee', color_continuous_scale='RdYlGn',
+                                     title="Análisis Comparativo Real por Línea", template="plotly_dark")
+
+                # Grafico 2: Tendencia Diaria para el Reporte (Cálculo Horizontal)
+                df_daily_rep = df_rep.groupby('fecha').apply(calc_report_metrics, include_groups=False).reset_index()
+                fig_html_trend = px.line(df_daily_rep, x='fecha', y='oee', markers=True,
+                                      title="Tendencia OEE Diaria (Totales)", template="plotly_dark")
                 fig_html_trend.add_hline(y=85, line_dash="dash", line_color="green", annotation_text="Target 85%")
 
-                # Grafico 3: Pareto (Hoja 2)
-                failure_cols = ['setup_excesivo', 'falla_mecanica', 'falla_electrica', 
+                # Grafico 3: Pareto (Este se mantiene igual porque ya usa .sum())
+                failure_cols = ['setup_excesivo', 'falla_mecanica', 'falla_electrica',
                               'falla_chamber', 'ajuste_no_programado', 'falta_material']
                 failures_rep = df_rep[failure_cols].sum().sort_values(ascending=False).reset_index()
                 failures_rep.columns = ['Falla', 'Minutos']
                 failures_rep['Acumulado'] = failures_rep['Minutos'].cumsum() / failures_rep['Minutos'].sum() * 100
-                
+
                 fig_html_pareto = make_subplots(specs=[[{"secondary_y": True}]])
                 fig_html_pareto.add_trace(go.Bar(x=failures_rep['Falla'], y=failures_rep['Minutos'], name="Minutos", marker_color="#ef4444"), secondary_y=False)
                 fig_html_pareto.add_trace(go.Scatter(x=failures_rep['Falla'], y=failures_rep['Acumulado'], name="% Acumulado", marker_color="#3b82f6"), secondary_y=True)
                 fig_html_pareto.update_layout(title="Pareto de Tiempo Muerto (Minutos)", template="plotly_dark")
 
-                # Obtener logo en base64
+                # --- El resto del código del HTML y Botones de descarga se mantiene igual ---
                 logo_b64 = get_image_base64("EA_2.png")
                 logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="width:120px; position:absolute; top:20px; left:20px;">' if logo_b64 else ""
-
-                # HTML FINAL
                 html_table = styled_pivot.to_html()
 
                 reporte_completo = f"""
@@ -461,11 +493,10 @@ with tab3:
                     </style>
                 </head>
                 <body>
-                    <!-- HOJA 1: RESUMEN Y TABLA -->
                     <div class="page">
                         {logo_html}
                         <h1>EA Innovation Suite: Reporte OEE</h1>
-                        <p><strong>Resumen Operativo</strong> | Rango: {start_d} al {end_d}</p>
+                        <p><strong>Resumen Operativo (Cálculo Horizontal)</strong> | Rango: {start_d} al {end_d}</p>
                         <hr style="border: 0.5px solid #334155;">
                         <h3>Tabla de Rendimiento General</h3>
                         {html_table}
@@ -475,24 +506,17 @@ with tab3:
                         <br>
                         <p style="font-size: 0.8em; color: #94a3b8;">Hoja 1 de 2 | Generado por Master Engineer Erik Armenta</p>
                     </div>
-
                     <div class="page-break"></div>
-
-                    <!-- HOJA 2: DETALLES Y GRÁFICOS -->
                     <div class="page">
                         {logo_html}
                         <h1>Análisis Detallado</h1>
                         <p><strong>Tendencias y Fallas</strong></p>
                         <hr style="border: 0.5px solid #334155;">
-                        
                         <h3>Tendencia de OEE en el Tiempo</h3>
                         {fig_html_trend.to_html(full_html=False, include_plotlyjs=False)}
-                        
                         <br><br>
-                        
                         <h3>Análisis de Pareto (Tiempos Muertos)</h3>
                         {fig_html_pareto.to_html(full_html=False, include_plotlyjs=False)}
-                        
                         <br>
                         <p style="font-size: 0.8em; color: #94a3b8;">Hoja 2 de 2 | Generado por Master Engineer Erik Armenta</p>
                     </div>
@@ -502,22 +526,8 @@ with tab3:
 
                 col_btn1, col_btn2 = st.columns(2)
                 with col_btn1:
-                    st.download_button(
-                        "📊 Descargar Reporte",
-                        reporte_completo,
-                        f"Reporte_OEE_{start_d}.html",
-                        "text/html",
-                        use_container_width=True
-                    )
+                    st.download_button("📊 Descargar Reporte", reporte_completo, f"Reporte_OEE_{start_d}.html", "text/html", use_container_width=True)
                 with col_btn2:
-                    st.download_button(
-                        "📊 Descargar Datos Crudos",
-                        df_rep.to_csv().encode('utf-8'),
-                        "datos_oee.csv",
-                        "text/csv",
-                        use_container_width=True
-                    )
+                    st.download_button("📊 Descargar Datos Crudos", df_rep.to_csv().encode('utf-8'), "datos_oee.csv", "text/csv", use_container_width=True)
             else:
                 st.info("No hay datos para reportar.")
-        else:
-            st.info("No hay datos cargados.")
