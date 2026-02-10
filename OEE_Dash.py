@@ -161,24 +161,24 @@ def make_donut(input_response, input_text, input_color):
         "% value": [100, 0]
     })
 
-    plot = alt.Chart(source).mark_arc(innerRadius=45, cornerRadius=25).encode(
+    plot = alt.Chart(source).mark_arc(innerRadius=60, cornerRadius=25).encode(
         theta="% value",
         color= alt.Color("Topic:N",
                         scale=alt.Scale(
                             domain=[input_text, ''],
                             range=chart_color),
                         legend=None),
-    ).properties(width=130, height=130)
+    ).properties(width=180, height=180)
 
-    text = plot.mark_text(align='center', color="#29b5e8", font="Lato", fontSize=32, fontWeight=700, fontStyle="italic").encode(text=alt.value(f'{input_response:.2f}%'))
-    plot_bg = alt.Chart(source_bg).mark_arc(innerRadius=45, cornerRadius=20).encode(
+    text = plot.mark_text(align='center', color="#29b5e8", font="Lato", fontSize=28, fontWeight=700, fontStyle="italic").encode(text=alt.value(f'{input_response:.2f}%'))
+    plot_bg = alt.Chart(source_bg).mark_arc(innerRadius=60, cornerRadius=20).encode(
         theta="% value",
         color= alt.Color("Topic:N",
                         scale=alt.Scale(
                             domain=[input_text, ''],
                             range=chart_color),
                         legend=None),
-    ).properties(width=130, height=130)
+    ).properties(width=180, height=180)
     return plot_bg + plot + text
 
 with tab1:
@@ -531,3 +531,4 @@ with tab3:
                     st.download_button("📊 Descargar Datos Crudos", df_rep.to_csv().encode('utf-8'), "datos_oee.csv", "text/csv", use_container_width=True)
             else:
                 st.info("No hay datos para reportar.")
+
