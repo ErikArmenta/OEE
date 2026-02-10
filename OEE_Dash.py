@@ -124,11 +124,27 @@ with st.sidebar:
     filter_date_range = st.date_input("📅 Rango de Fechas",
                                     [date.today() - timedelta(days=30), date.today()])
 
-    # Líneas disponibles (SL001 - SL033)
-    lineas_opts = [f"SL{str(i).zfill(3)}" for i in range(1, 34)]
-    filter_line = st.multiselect("🏭 Líneas", lineas_opts, default=lineas_opts[:5])
 
-    filter_turn = st.multiselect("⏰ Turno", ["Mañana", "Tarde", "Noche"], default=["Mañana", "Tarde", "Noche"])
+    # Obtener líneas dinámicas desde la BD según rango de fechas
+    if db and len(filter_date_range) == 2:
+        start_d, end_d = filter_date_range
+        df_lines = db.fetch_records(start_d, end_d)
+
+        if not df_lines.empty:
+            lineas_opts = sorted(df_lines['linea'].unique().tolist())
+        else:
+            lineas_opts = []
+    else:
+        lineas_opts = []
+
+    filter_line = st.multiselect(
+        "🏭 Líneas",
+        lineas_opts,
+        default=lineas_opts
+    )
+
+
+    filter_turn = st.multiselect("⏰ Turno", ["1er", "2do", "3cer"], default=["1er", "2do", "3cer"])
 
     st.markdown("---")
     st.markdown("**Master Engineer Erik Armenta**")
@@ -244,7 +260,7 @@ with tab1:
                         tp = x['tiempo_programado_min'].sum()
                         tm = x['tiempo_muerto'].sum()
                         prod = x['producido'].sum()
-                        esp = (df['tiempo_funcionamiento'] * (df['rate_teorico'] / 60)).sum()
+                        esp = (x['tiempo_funcionamiento'] * (x['rate_teorico'] / 60)).sum()
                         rech = x['rechazos_fugas'].sum()
                         d = (tp - tm) / tp if tp > 0 else 0
                         p = prod / esp if esp > 0 else 0
@@ -319,12 +335,12 @@ with tab2:
             f_linea = st.selectbox("Línea", lineas_opts)
 
         with col2:
-            f_turno = st.selectbox("Turno", ["Mañana", "Tarde", "Noche"])
+            f_turno = st.selectbox("Turno", ["1er", "2do", "3cer"])
             f_modelo = st.text_input("Modelo/Parte")
 
         with col3:
             f_tiempo_prog = st.number_input("Tiempo Programado (min)", min_value=0, value=480, help="Tiempo Total del Turno")
-            f_rate = st.number_input("Rate Teórico/Eficiencia (u/min)", min_value=0.0, value=1.0, format="%.2f")
+            f_rate = st.number_input("Rate Teórico/Eficiencia (u/h)", min_value=0.0, value=1.0, format="%.2f")
 
         with col4:
             f_producido = st.number_input("Total Producido", min_value=0)
@@ -408,54 +424,58 @@ def get_image_base64(path):
 with tab3:
     st.markdown("<h2 style='text-align: center;'>📄 Generador de Reportes Interactivos</h2>", unsafe_allow_html=True)
 
-    if db and len(filter_date_range) == 2:
+    if not db:
+        st.error("⚠️ Sin conexión a la base de datos.")
+    elif len(filter_date_range) == 2:
         start_d, end_d = filter_date_range
         raw_df_rep = db.fetch_records(start_d, end_d)
 
         if not raw_df_rep.empty:
-            # --- FILTROS ESPECÍFICOS PARA REPORTES ---
+            # --- FILTROS ESPECÍFICOS ---
             st.markdown("### 🔍 Refinar Reporte")
             c_f1, c_f2 = st.columns(2)
-
             with c_f1:
-                # Filtro por Modelo (Extraído de los datos actuales)
                 modelos_disponibles = sorted(raw_df_rep['modelo'].unique().tolist())
                 rep_filter_model = st.multiselect("Filtrar por Modelo", modelos_disponibles, default=modelos_disponibles)
-
             with c_f2:
-                # Filtro por Turno
-                turnos_disponibles = ["Mañana", "Tarde", "Noche"]
-                rep_filter_turn = st.multiselect("Filtrar por Turno", turnos_disponibles, default=filter_turn)
+                turnos_disponibles = ["1er", "2do", "3cer"]
+                rep_filter_turn = st.multiselect("Filtrar por Turno", turnos_disponibles, default=["1er", "2do", "3cer"])
 
-            # Aplicar todos los filtros (Globales + Específicos del Tab 3)
+            # Aplicar filtros
             df_rep = raw_df_rep[
                 (raw_df_rep['linea'].isin(filter_line)) &
                 (raw_df_rep['turno'].isin(rep_filter_turn)) &
                 (raw_df_rep['modelo'].isin(rep_filter_model))
-            ]
+            ].copy()
 
             if not df_rep.empty:
-                # --- TABLA CON TODOS LOS REGISTROS ---
-                tabla_completa = df_rep[['fecha', 'linea', 'turno', 'modelo', 'disponibilidad', 'rendimiento', 'calidad', 'oee']].copy()
+                # --- RE-CÁLCULO DE FILAS (Corrección de datos heredados de BD) ---
+                df_rep['tiempo_prog_hrs'] = (df_rep['tiempo_programado_min'] / 60).round(2)
+                df_rep['capacidad_real'] = df_rep['tiempo_funcionamiento'] * (df_rep['rate_teorico'] / 60)
 
-                # Redondeo a 2 decimales para precisión EA Innovation
-                cols_decimales = ['disponibilidad', 'rendimiento', 'calidad', 'oee']
-                tabla_completa[cols_decimales] = tabla_completa[cols_decimales].round(2)
+                # Recalculamos indicadores individuales para la tabla
+                df_rep['rendimiento'] = (df_rep['producido'] / df_rep['capacidad_real'] * 100).replace([np.inf, -np.inf], 0).fillna(0)
+                df_rep['calidad'] = ((df_rep['producido'] - df_rep['rechazos_fugas']) / df_rep['producido'] * 100).fillna(0)
+                df_rep['oee'] = (df_rep['disponibilidad'] * df_rep['rendimiento'] * df_rep['calidad']) / 10000
 
-                st.subheader("Detalle de Registros (Listado Completo)")
+                # 1. VISTA DE TABLA
+                vista_tabla = df_rep[['fecha', 'linea', 'turno', 'modelo', 'tiempo_prog_hrs', 'producido', 'disponibilidad', 'rendimiento', 'calidad', 'oee']]
+                cols_kpi = ['disponibilidad', 'rendimiento', 'calidad', 'oee']
+                vista_tabla[cols_kpi] = vista_tabla[cols_kpi].round(2)
+
+                st.subheader("Detalle de Operaciones Individuales")
                 try:
-                    styled_pivot = tabla_completa.style.map(aplicar_semaforo, subset=['oee', 'rendimiento'])
+                    styled_pivot = vista_tabla.style.map(aplicar_semaforo, subset=['oee', 'rendimiento'])
                 except:
-                    styled_pivot = tabla_completa.style.applymap(aplicar_semaforo, subset=['oee', 'rendimiento'])
-
+                    styled_pivot = vista_tabla.style.applymap(aplicar_semaforo, subset=['oee', 'rendimiento'])
                 st.dataframe(styled_pivot, use_container_width=True)
 
-                # --- LÓGICA DE GRÁFICOS (HORIZONTAL) ---
-                def calc_report_metrics(x):
+                # --- 2. LÓGICA DE GRÁFICOS (HORIZONTAL REAL) ---
+                def calc_h_report(x):
                     tp = x['tiempo_programado_min'].sum()
                     tm = x['tiempo_muerto'].sum()
                     prod = x['producido'].sum()
-                    esp = (df['tiempo_funcionamiento'] * (df['rate_teorico'] / 60)).sum()
+                    esp = (x['tiempo_funcionamiento'] * (x['rate_teorico'] / 60)).sum()
                     rech = x['rechazos_fugas'].sum()
                     d = (tp - tm) / tp if tp > 0 else 0
                     p = prod / esp if esp > 0 else 0
@@ -467,81 +487,187 @@ with tab3:
                         'calidad': round(q*100, 2)
                     })
 
-                # Gráficos para el Reporte
-                pivot_resumen = df_rep.groupby('linea').apply(calc_report_metrics, include_groups=False)
+                # Generar datos agrupados
+                df_line_rep = df_rep.groupby('linea').apply(calc_h_report, include_groups=False).reset_index()
+                df_daily_rep = df_rep.groupby('fecha').apply(calc_h_report, include_groups=False).reset_index()
 
-                fig_html_bar = px.bar(pivot_resumen.reset_index(), x='linea', y='oee',
-                                     color='oee', color_continuous_scale='RdYlGn',
-                                     title="Análisis Comparativo por Línea", template="plotly_dark")
+                # Gráficas para la UI de Streamlit
+                c1, c2 = st.columns(2)
+                with c1:
+                    fig_bar = px.bar(df_line_rep, x='linea', y='oee', color='oee',
+                                    color_continuous_scale='RdYlGn', title="OEE por Línea (Totales)")
+                    st.plotly_chart(fig_bar, use_container_width=True)
+                with c2:
+                    fig_trend = px.line(df_daily_rep, x='fecha', y='oee', markers=True, title="Tendencia Diaria Real")
+                    st.plotly_chart(fig_trend, use_container_width=True)
 
-                df_daily_rep = df_rep.groupby('fecha').apply(calc_report_metrics, include_groups=False).reset_index()
-                fig_html_trend = px.line(df_daily_rep, x='fecha', y='oee', markers=True,
-                                      title="Tendencia OEE Diaria (Cálculo Real)", template="plotly_dark")
-
-                failure_cols = ['setup_excesivo', 'falla_mecanica', 'falla_electrica',
-                              'falla_chamber', 'ajuste_no_programado', 'falta_material']
+                # Pareto de Fallas
+                st.subheader("Análisis de Tiempos Muertos")
+                failure_cols = ['setup_excesivo', 'falla_mecanica', 'falla_electrica', 'falla_chamber', 'ajuste_no_programado', 'falta_material']
                 failures_rep = df_rep[failure_cols].sum().sort_values(ascending=False).reset_index()
                 failures_rep.columns = ['Falla', 'Minutos']
-                failures_rep['Acumulado'] = failures_rep['Minutos'].cumsum() / failures_rep['Minutos'].sum() * 100
+                failures_rep['Acumulado'] = (failures_rep['Minutos'].cumsum() / failures_rep['Minutos'].sum() * 100).fillna(0)
 
-                fig_html_pareto = make_subplots(specs=[[{"secondary_y": True}]])
-                fig_html_pareto.add_trace(go.Bar(x=failures_rep['Falla'], y=failures_rep['Minutos'], name="Minutos", marker_color="#ef4444"), secondary_y=False)
-                fig_html_pareto.add_trace(go.Scatter(x=failures_rep['Falla'], y=failures_rep['Acumulado'], name="% Acumulado", marker_color="#3b82f6"), secondary_y=True)
-                fig_html_pareto.update_layout(title="Pareto de Tiempo Muerto (Minutos)", template="plotly_dark")
+                fig_pareto = make_subplots(specs=[[{"secondary_y": True}]])
+                fig_pareto.add_trace(go.Bar(x=failures_rep['Falla'], y=failures_rep['Minutos'], name="Minutos", marker_color="#ef4444"), secondary_y=False)
+                fig_pareto.add_trace(go.Scatter(x=failures_rep['Falla'], y=failures_rep['Acumulado'], name="% Acumulado", marker_color="#3b82f6"), secondary_y=True)
+                fig_pareto.update_layout(title="Pareto Global de Fallas", template="plotly_dark")
+                st.plotly_chart(fig_pareto, use_container_width=True)
 
-                # Generación del HTML para el Reporte
+# --- 3. CONSTRUCCIÓN DEL REPORTE HTML (ESTILO FINAL EA INNOVATION) ---
                 logo_b64 = get_image_base64("EA_2.png")
-                logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="width:120px; position:absolute; top:20px; left:20px;">' if logo_b64 else ""
+                # El logo ahora tiene posición absoluta para quedarse en la esquina superior izquierda
+                logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="width:120px; position:absolute; top:30px; left:30px;">' if logo_b64 else ""
+
+                # Usamos el HTML de la tabla corregida
                 html_table = styled_pivot.to_html()
+
+                # --- Aplicar Dark Mode Profesional EA a todas las gráficas ---
+                # Dark mode
+                dark_layout = dict(
+                    template="plotly_dark",
+                    paper_bgcolor="#0f172a",
+                    plot_bgcolor="#0f172a",
+                    font=dict(color="#f8fafc"),
+                )
+
+                fig_bar.update_layout(**dark_layout)
+                fig_trend.update_layout(**dark_layout)
+                fig_pareto.update_layout(**dark_layout)
+
+                # Cambiar línea del gráfico de tendencia a azul EA
+                fig_trend.update_traces(
+                    line=dict(color="#38bdf8", width=3),
+                    marker=dict(size=6, color="#38bdf8"),
+                    mode="lines+markers"
+                )
+
 
                 reporte_completo = f"""
                 <html>
                 <head>
                     <meta charset="utf-8">
-                    <title>Reporte EA Innovation - OEE</title>
+                    <title>Reporte Ejecutivo OEE | EA Innovation</title>
                     <style>
-                        body {{ background-color: #0f172a; color: #f8fafc; font-family: 'Segoe UI', sans-serif; text-align: center; padding: 40px; }}
-                        .page {{ max-width: 1200px; margin: auto; background: #1e293b; padding: 30px; border-radius: 15px; margin-bottom: 50px; position: relative; }}
-                        table {{ width: 100%; border-collapse: collapse; margin-top: 20px; color: white; font-size: 0.85em; }}
-                        th, td {{ padding: 8px; border: 1px solid #334155; text-align: center; }}
-                        th {{ background-color: #334155; }}
-                        h1 {{ color: #38bdf8; }}
+                        body {{
+                            background-color: #0f172a;
+                            color: #f8fafc;
+                            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                            margin: 0;
+                            padding: 40px;
+                            text-align: center;
+                        }}
+                        .page {{
+                            max-width: 1100px;
+                            margin: 0 auto 50px auto;
+                            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+                            padding: 60px 50px 50px 50px;
+                            border-radius: 15px;
+                            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+                            border: 1px solid #334155;
+                            min-height: 1000px;
+                            position: relative; /* Necesario para el logo absoluto */
+                        }}
+                        h1 {{ color: #38bdf8; font-size: 2.5em; margin-bottom: 10px; }}
+                        h3 {{ color: #94a3b8; border-bottom: 1px solid #334155; padding-bottom: 10px; margin-top: 40px; }}
+                        p {{ color: #94a3b8; font-size: 1.2em; margin: 5px 0; }}
+
+                        /* Estilos de Tabla Centrada */
+                        table {{
+                            width: 100%;
+                            border-collapse: collapse;
+                            margin: 30px auto;
+                            background-color: rgba(15, 23, 42, 0.6);
+                            border-radius: 10px;
+                            overflow: hidden;
+                            font-size: 0.9em;
+                        }}
+                        th {{
+                            background-color: #334155;
+                            color: #38bdf8;
+                            padding: 15px;
+                            text-align: center;
+                            text-transform: uppercase;
+                        }}
+                        td {{
+                            padding: 12px;
+                            border-bottom: 1px solid #334155;
+                            text-align: center;
+                        }}
+
+                        /* Contenedor de Gráficas DarkMode */
+                        .chart-container {{
+                            background-color: #0f172a;
+                            border: 1px solid #334155;
+                            border-radius: 12px;
+                            padding: 10px;
+                            margin: 20px auto;
+                            max-width: 100%;
+                        }}
+
                         .page-break {{ page-break-before: always; }}
+
+                        .footer {{
+                            margin-top: 60px;
+                            font-size: 0.9em;
+                            color: #64748b;
+                            border-top: 1px solid #334155;
+                            padding-top: 20px;
+                        }}
                     </style>
                 </head>
                 <body>
                     <div class="page">
                         {logo_html}
-                        <h1>EA Innovation Suite: Reporte OEE</h1>
-                        <p><strong>Detalle de Operaciones</strong> | Período: {start_d} a {end_d}</p>
-                        <hr style="border: 0.5px solid #334155;">
-                        <h3>Tabla de Registros Individuales</h3>
-                        {html_table}
-                        <br>
-                        <h3>Comparativo por Línea</h3>
-                        {fig_html_bar.to_html(full_html=False, include_plotlyjs='cdn')}
+                        <h1>EA Innovation Suite</h1>
+                        <p>Reporte de Desempeño OEE Operativo</p>
+                        <p style="font-size: 1em; opacity: 0.8;">Período: {start_d} al {end_d}</p>
+
+                        <h3>Listado Detallado de Operaciones (Horas)</h3>
+                        <div style="overflow-x: auto;">
+                            {html_table}
+                        </div>
+
+                        <h3>Análisis Comparativo por Línea (OEE Acumulado)</h3>
+                        <div class="chart-container">
+                            {fig_bar.to_html(full_html=False, include_plotlyjs='cdn')}
+                        </div>
+
+                        <div class="footer">
+                            Generado por Master Engineer Erik Armenta | EA Innovation Suite 2026
+                        </div>
                     </div>
+
                     <div class="page-break"></div>
+
                     <div class="page">
                         {logo_html}
                         <h1>Análisis de Tendencias</h1>
-                        <hr style="border: 0.5px solid #334155;">
-                        <h3>OEE Diario</h3>
-                        {fig_html_trend.to_html(full_html=False, include_plotlyjs=False)}
-                        <br><br>
-                        <h3>Pareto de Tiempos Muertos</h3>
-                        {fig_html_pareto.to_html(full_html=False, include_plotlyjs=False)}
-                        <p style="font-size: 0.8em; color: #94a3b8; margin-top:30px;">Generado por Master Engineer Erik Armenta</p>
+                        <p>Productividad y Eficiencia Acumulada</p>
+
+                        <h3>Comportamiento Diario del OEE</h3>
+                        <div class="chart-container">
+                            {fig_trend.to_html(full_html=False, include_plotlyjs=False)}
+                        </div>
+
+                        <h3>Pareto Global de Fallas (Minutos)</h3>
+                        <div class="chart-container">
+                            {fig_pareto.to_html(full_html=False, include_plotlyjs=False)}
+                        </div>
+
+                        <div class="footer">
+                            Este reporte es una auditoría técnica de EA Innovation. <br>
+                            La precisión se basa en el cálculo horizontal de totales.
+                        </div>
                     </div>
                 </body>
                 </html>
                 """
 
-                col_btn1, col_btn2 = st.columns(2)
-                with col_btn1:
-                    st.download_button("📊 Descargar Reporte HTML", reporte_completo, f"Reporte_OEE_{start_d}.html", "text/html", use_container_width=True)
-                with col_btn2:
-                    st.download_button("📊 Descargar Datos CSV", df_rep.to_csv(index=False).encode('utf-8'), "datos_oee.csv", "text/csv", use_container_width=True)
+                col1, col2 = st.columns(2)
+                with col1: st.download_button("📊 Descargar Reporte Completo", reporte_completo, f"Reporte_OEE_{start_d}.html", "text/html", use_container_width=True)
+                with col2: st.download_button("📊 Descargar Datos CSV", df_rep.to_csv(index=False).encode('utf-8'), "datos_oee.csv", "text/csv", use_container_width=True)
             else:
-                st.warning("No hay datos que coincidan con los filtros seleccionados en este Tab.")
+                st.warning("No hay datos para estos filtros.")
+
 
