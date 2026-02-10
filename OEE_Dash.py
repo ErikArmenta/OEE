@@ -318,21 +318,25 @@ with tab1:
         else:
             st.info("Seleccione un rango de fechas válido.")
 # -----------------------------------------------------------------------------
-# TAB 2: CAPTURA DE DATOS
+# TAB 2: CAPTURA DE DATOS (CORREGIDA)
 # -----------------------------------------------------------------------------
 with tab2:
     st.header("📝 Nuevo Registro OEE")
     st.markdown("Celdas naranjas del formato Excel original.")
 
+    # Generamos la lista de líneas aquí mismo para asegurar que SL001 a SL033 existan
+    lineas_opciones = [f"SL{str(i).zfill(3)}" for i in range(1, 34)]
+
     if not db:
-        st.warning("⚠️ Base de datos no conectada. No se podran guardar registros.")
+        st.warning("⚠️ Base de datos no conectada. No se podrán guardar registros.")
 
     with st.form("oee_form", clear_on_submit=True):
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             f_fecha = st.date_input("Fecha", date.today())
-            f_linea = st.selectbox("Línea", lineas_opts)
+            # Usamos la lista recién generada
+            f_linea = st.selectbox("Línea", lineas_opciones)
 
         with col2:
             f_turno = st.selectbox("Turno", ["1er", "2do", "3cer"])
@@ -340,6 +344,7 @@ with tab2:
 
         with col3:
             f_tiempo_prog = st.number_input("Tiempo Programado (min)", min_value=0, value=480, help="Tiempo Total del Turno")
+            # Nota: El label dice u/h para que el usuario meta el 120, la lógica de cálculo ya debe tener el /60
             f_rate = st.number_input("Rate Teórico/Eficiencia (u/h)", min_value=0.0, value=1.0, format="%.2f")
 
         with col4:
@@ -358,7 +363,7 @@ with tab2:
         submitted = st.form_submit_button("💾 Guardar Registro", type="primary")
 
         if submitted:
-            # Calcular Métricas
+            # Calcular Métricas (Asegúrate que tu función calculate_metrics ya divida f_rate entre 60)
             metrics = calculate_metrics(f_tiempo_prog, f_rate, f_producido, f_rechazos,
                                      f_setup, f_mec, f_elec, f_cham, f_ajuste, f_mat)
 
@@ -390,7 +395,7 @@ with tab2:
                 res = db.insert_record(payload)
                 if res:
                     st.success(f"✅ Registro guardado para {f_linea}")
-                    st.info(f"OEE: {metrics['oee']:.1f}% | Rendimiento: {metrics['rendimiento']:.1f}% | FTT (Calidad): {metrics['calidad']:.1f}%")
+                    st.info(f"OEE: {metrics['oee']:.2f}% | Rendimiento: {metrics['rendimiento']:.2f}% | Calidad: {metrics['calidad']:.2f}%")
                 else:
                     st.error("❌ Error al guardar en base de datos.")
             else:
@@ -669,5 +674,6 @@ with tab3:
                 with col2: st.download_button("📊 Descargar Datos CSV", df_rep.to_csv(index=False).encode('utf-8'), "datos_oee.csv", "text/csv", use_container_width=True)
             else:
                 st.warning("No hay datos para estos filtros.")
+
 
 
