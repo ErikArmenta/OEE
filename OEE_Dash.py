@@ -207,7 +207,7 @@ with tab1:
                     total_producido = df['producido'].sum()
 
                     # Para el esperado, sumamos la capacidad teórica de cada registro individualmente
-                    total_esperado = (df['tiempo_funcionamiento'] * df['rate_teorico']).sum()
+                    total_esperado = (df['tiempo_funcionamiento'] * (df['rate_teorico'] / 60)).sum()
                     total_rechazos = df['rechazos_fugas'].sum()
 
                     # Calculamos componentes globales
@@ -244,7 +244,7 @@ with tab1:
                         tp = x['tiempo_programado_min'].sum()
                         tm = x['tiempo_muerto'].sum()
                         prod = x['producido'].sum()
-                        esp = (x['tiempo_funcionamiento'] * x['rate_teorico']).sum()
+                        esp = (df['tiempo_funcionamiento'] * (df['rate_teorico'] / 60)).sum()
                         rech = x['rechazos_fugas'].sum()
                         d = (tp - tm) / tp if tp > 0 else 0
                         p = prod / esp if esp > 0 else 0
@@ -413,18 +413,49 @@ with tab3:
         raw_df_rep = db.fetch_records(start_d, end_d)
 
         if not raw_df_rep.empty:
+            # --- FILTROS ESPECÍFICOS PARA REPORTES ---
+            st.markdown("### 🔍 Refinar Reporte")
+            c_f1, c_f2 = st.columns(2)
+
+            with c_f1:
+                # Filtro por Modelo (Extraído de los datos actuales)
+                modelos_disponibles = sorted(raw_df_rep['modelo'].unique().tolist())
+                rep_filter_model = st.multiselect("Filtrar por Modelo", modelos_disponibles, default=modelos_disponibles)
+
+            with c_f2:
+                # Filtro por Turno
+                turnos_disponibles = ["Mañana", "Tarde", "Noche"]
+                rep_filter_turn = st.multiselect("Filtrar por Turno", turnos_disponibles, default=filter_turn)
+
+            # Aplicar todos los filtros (Globales + Específicos del Tab 3)
             df_rep = raw_df_rep[
                 (raw_df_rep['linea'].isin(filter_line)) &
-                (raw_df_rep['turno'].isin(filter_turn))
+                (raw_df_rep['turno'].isin(rep_filter_turn)) &
+                (raw_df_rep['modelo'].isin(rep_filter_model))
             ]
 
             if not df_rep.empty:
-                # --- FUNCIÓN DE APOYO PARA CÁLCULO HORIZONTAL ---
+                # --- TABLA CON TODOS LOS REGISTROS ---
+                tabla_completa = df_rep[['fecha', 'linea', 'turno', 'modelo', 'disponibilidad', 'rendimiento', 'calidad', 'oee']].copy()
+
+                # Redondeo a 2 decimales para precisión EA Innovation
+                cols_decimales = ['disponibilidad', 'rendimiento', 'calidad', 'oee']
+                tabla_completa[cols_decimales] = tabla_completa[cols_decimales].round(2)
+
+                st.subheader("Detalle de Registros (Listado Completo)")
+                try:
+                    styled_pivot = tabla_completa.style.map(aplicar_semaforo, subset=['oee', 'rendimiento'])
+                except:
+                    styled_pivot = tabla_completa.style.applymap(aplicar_semaforo, subset=['oee', 'rendimiento'])
+
+                st.dataframe(styled_pivot, use_container_width=True)
+
+                # --- LÓGICA DE GRÁFICOS (HORIZONTAL) ---
                 def calc_report_metrics(x):
                     tp = x['tiempo_programado_min'].sum()
                     tm = x['tiempo_muerto'].sum()
                     prod = x['producido'].sum()
-                    esp = (x['tiempo_funcionamiento'] * x['rate_teorico']).sum()
+                    esp = (df['tiempo_funcionamiento'] * (df['rate_teorico'] / 60)).sum()
                     rech = x['rechazos_fugas'].sum()
                     d = (tp - tm) / tp if tp > 0 else 0
                     p = prod / esp if esp > 0 else 0
@@ -436,31 +467,17 @@ with tab3:
                         'calidad': round(q*100, 2)
                     })
 
-                # 1. Crear Tabla de Resumen (Cálculo Horizontal en lugar de pivot_table mean)
-                pivot = df_rep.groupby('linea').apply(calc_report_metrics, include_groups=False)
+                # Gráficos para el Reporte
+                pivot_resumen = df_rep.groupby('linea').apply(calc_report_metrics, include_groups=False)
 
-                # Aplicar Estilo de Semáforo
-                st.subheader("Vista Previa de Rendimiento (Totales Reales)")
-                try:
-                    styled_pivot = pivot.style.map(aplicar_semaforo, subset=['oee', 'rendimiento'])
-                except:
-                    styled_pivot = pivot.style.applymap(aplicar_semaforo, subset=['oee', 'rendimiento'])
-
-                st.dataframe(styled_pivot, use_container_width=True)
-
-                # 2. GENERACIÓN DE GRÁFICOS PARA EL REPORTE
-                # Grafico 1: Barras OEE por Línea (Basado en el cálculo horizontal anterior)
-                fig_html_bar = px.bar(pivot.reset_index(), x='linea', y='oee',
+                fig_html_bar = px.bar(pivot_resumen.reset_index(), x='linea', y='oee',
                                      color='oee', color_continuous_scale='RdYlGn',
-                                     title="Análisis Comparativo Real por Línea", template="plotly_dark")
+                                     title="Análisis Comparativo por Línea", template="plotly_dark")
 
-                # Grafico 2: Tendencia Diaria para el Reporte (Cálculo Horizontal)
                 df_daily_rep = df_rep.groupby('fecha').apply(calc_report_metrics, include_groups=False).reset_index()
                 fig_html_trend = px.line(df_daily_rep, x='fecha', y='oee', markers=True,
-                                      title="Tendencia OEE Diaria (Totales)", template="plotly_dark")
-                fig_html_trend.add_hline(y=85, line_dash="dash", line_color="green", annotation_text="Target 85%")
+                                      title="Tendencia OEE Diaria (Cálculo Real)", template="plotly_dark")
 
-                # Grafico 3: Pareto (Este se mantiene igual porque ya usa .sum())
                 failure_cols = ['setup_excesivo', 'falla_mecanica', 'falla_electrica',
                               'falla_chamber', 'ajuste_no_programado', 'falta_material']
                 failures_rep = df_rep[failure_cols].sum().sort_values(ascending=False).reset_index()
@@ -472,7 +489,7 @@ with tab3:
                 fig_html_pareto.add_trace(go.Scatter(x=failures_rep['Falla'], y=failures_rep['Acumulado'], name="% Acumulado", marker_color="#3b82f6"), secondary_y=True)
                 fig_html_pareto.update_layout(title="Pareto de Tiempo Muerto (Minutos)", template="plotly_dark")
 
-                # --- El resto del código del HTML y Botones de descarga se mantiene igual ---
+                # Generación del HTML para el Reporte
                 logo_b64 = get_image_base64("EA_2.png")
                 logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="width:120px; position:absolute; top:20px; left:20px;">' if logo_b64 else ""
                 html_table = styled_pivot.to_html()
@@ -483,12 +500,12 @@ with tab3:
                     <meta charset="utf-8">
                     <title>Reporte EA Innovation - OEE</title>
                     <style>
-                        body {{ background-color: #0f172a; color: #f8fafc; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; padding: 40px; }}
-                        .page {{ max-width: 1200px; margin: auto; background: #1e293b; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); margin-bottom: 50px; position: relative; }}
-                        table {{ width: 100%; border-collapse: collapse; margin-top: 20px; color: white; }}
-                        th, td {{ padding: 12px; border: 1px solid #334155; text-align: center; }}
+                        body {{ background-color: #0f172a; color: #f8fafc; font-family: 'Segoe UI', sans-serif; text-align: center; padding: 40px; }}
+                        .page {{ max-width: 1200px; margin: auto; background: #1e293b; padding: 30px; border-radius: 15px; margin-bottom: 50px; position: relative; }}
+                        table {{ width: 100%; border-collapse: collapse; margin-top: 20px; color: white; font-size: 0.85em; }}
+                        th, td {{ padding: 8px; border: 1px solid #334155; text-align: center; }}
                         th {{ background-color: #334155; }}
-                        h1 {{ color: #38bdf8; margin-top: 40px; }}
+                        h1 {{ color: #38bdf8; }}
                         .page-break {{ page-break-before: always; }}
                     </style>
                 </head>
@@ -496,29 +513,25 @@ with tab3:
                     <div class="page">
                         {logo_html}
                         <h1>EA Innovation Suite: Reporte OEE</h1>
-                        <p><strong>Resumen Operativo (Cálculo Horizontal)</strong> | Rango: {start_d} al {end_d}</p>
+                        <p><strong>Detalle de Operaciones</strong> | Período: {start_d} a {end_d}</p>
                         <hr style="border: 0.5px solid #334155;">
-                        <h3>Tabla de Rendimiento General</h3>
+                        <h3>Tabla de Registros Individuales</h3>
                         {html_table}
                         <br>
-                        <h3>Comparativo de Eficiencia</h3>
+                        <h3>Comparativo por Línea</h3>
                         {fig_html_bar.to_html(full_html=False, include_plotlyjs='cdn')}
-                        <br>
-                        <p style="font-size: 0.8em; color: #94a3b8;">Hoja 1 de 2 | Generado por Master Engineer Erik Armenta</p>
                     </div>
                     <div class="page-break"></div>
                     <div class="page">
                         {logo_html}
-                        <h1>Análisis Detallado</h1>
-                        <p><strong>Tendencias y Fallas</strong></p>
+                        <h1>Análisis de Tendencias</h1>
                         <hr style="border: 0.5px solid #334155;">
-                        <h3>Tendencia de OEE en el Tiempo</h3>
+                        <h3>OEE Diario</h3>
                         {fig_html_trend.to_html(full_html=False, include_plotlyjs=False)}
                         <br><br>
-                        <h3>Análisis de Pareto (Tiempos Muertos)</h3>
+                        <h3>Pareto de Tiempos Muertos</h3>
                         {fig_html_pareto.to_html(full_html=False, include_plotlyjs=False)}
-                        <br>
-                        <p style="font-size: 0.8em; color: #94a3b8;">Hoja 2 de 2 | Generado por Master Engineer Erik Armenta</p>
+                        <p style="font-size: 0.8em; color: #94a3b8; margin-top:30px;">Generado por Master Engineer Erik Armenta</p>
                     </div>
                 </body>
                 </html>
@@ -526,9 +539,9 @@ with tab3:
 
                 col_btn1, col_btn2 = st.columns(2)
                 with col_btn1:
-                    st.download_button("📊 Descargar Reporte", reporte_completo, f"Reporte_OEE_{start_d}.html", "text/html", use_container_width=True)
+                    st.download_button("📊 Descargar Reporte HTML", reporte_completo, f"Reporte_OEE_{start_d}.html", "text/html", use_container_width=True)
                 with col_btn2:
-                    st.download_button("📊 Descargar Datos Crudos", df_rep.to_csv().encode('utf-8'), "datos_oee.csv", "text/csv", use_container_width=True)
+                    st.download_button("📊 Descargar Datos CSV", df_rep.to_csv(index=False).encode('utf-8'), "datos_oee.csv", "text/csv", use_container_width=True)
             else:
-                st.info("No hay datos para reportar.")
+                st.warning("No hay datos que coincidan con los filtros seleccionados en este Tab.")
 
