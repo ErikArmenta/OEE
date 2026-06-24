@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+"""
+Created on Wed Jun 24 13:00:15 2026
+
+@author: acer
+"""
+
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -11,16 +18,22 @@ from modules.supabase_client import SupabaseManager
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="Sistema OEE | EA Innovation",
-    page_icon="eficiencia.png",
+    page_title="Sistema OEE Rotarys | EA Innovation",
+    page_icon="⚙️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- ESTILOS CSS PERSONALIZADOS (Dark Mode & Professional) ---
+# --- CATÁLOGO DE MÁQUINAS Y RATES ---
+MAQUINAS_RATES = {
+    "CS0525": 115, "CS0524": 115, "CS0516": 180, "CS0523": 100,
+    "CS0522": 100, "CS0537": 200, "CS0514": 180, "CS0515": 180,
+    "CS0505": 200, "CS0544": 200, "CS0575": 120, "CS0595": 120
+}
+
+# --- ESTILOS CSS PERSONALIZADOS ---
 st.markdown("""
 <style>
-    /* Global Styles */
     .metric-card {
         background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
         padding: 20px;
@@ -29,34 +42,11 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.3);
         border: 1px solid #334155;
     }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 24px;
-        background-color: #0f172a;
-        padding: 10px;
-        border-radius: 10px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        color: #94a3b8;
-    }
-    .stTabs [data-baseweb="tab"][aria-selected="true"] {
-        color: #38bdf8;
-        background-color: #1e293b;
-        border-radius: 5px;
-    }
-    /* Button Styles */
-    div.stButton > button {
-        background-color: #2563eb;
-        color: white;
-        border-radius: 8px;
-        border: none;
-        padding: 0.5rem 1rem;
-        transition: all 0.3s ease;
-    }
-    div.stButton > button:hover {
-        background-color: #1d4ed8;
-        transform: translateY(-2px);
-    }
+    .stTabs [data-baseweb="tab-list"] { gap: 24px; background-color: #0f172a; padding: 10px; border-radius: 10px; }
+    .stTabs [data-baseweb="tab"] { height: 50px; color: #94a3b8; }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] { color: #38bdf8; background-color: #1e293b; border-radius: 5px; }
+    div.stButton > button { background-color: #2563eb; color: white; border-radius: 8px; border: none; padding: 0.5rem 1rem; transition: all 0.3s ease; }
+    div.stButton > button:hover { background-color: #1d4ed8; transform: translateY(-2px); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -64,87 +54,68 @@ st.markdown("""
 @st.cache_resource
 def init_connection():
     try:
+        # Busca la sección [supabase] en tus secrets
         if "supabase" in st.secrets:
             url = st.secrets["supabase"]["url"]
             key = st.secrets["supabase"]["key"]
             return SupabaseManager(url, key)
         else:
+            st.error("⚠️ No se encontró la sección [supabase] en secrets.toml")
             return None
     except Exception as e:
+        # Si la librería SupabaseManager falla, te escupe el error real aquí
+        st.error(f"⚠️ Error al inicializar Supabase: {e}")
         return None
 
 db = init_connection()
 
-# --- FUNCIONES DE CÁLCULO (BACKEND LOGIC) ---
-def calculate_metrics(tiempo_programado, rate_teorico, producido, rechazos,
-                     setup, f_mec, f_elec, f_cham, ajuste, f_mat):
+# --- FUNCIONES DE CÁLCULO ---
+def calculate_metrics(tiempo_programado, rate_teorico, producido, scrap,
+                      ajuste, f_mec, f_elec, f_personal, f_mat, c_modelo):
 
-    # 1. Tiempo Muerto (Suma de fallas)
-    tiempo_muerto = setup + f_mec + f_elec + f_cham + ajuste + f_mat
-
-    # 2. Tiempo Funcionamiento
+    tiempo_muerto = ajuste + f_mec + f_elec + f_personal + f_mat + c_modelo
     tiempo_funcionamiento = max(0, tiempo_programado - tiempo_muerto)
 
-    # 3. Disponibilidad: (Tiempo Programado - Tiempo Muerto) / Tiempo Programado
     disponibilidad = (tiempo_funcionamiento / tiempo_programado) if tiempo_programado > 0 else 0
-
-    # 4. Rendimiento: Unidades Producidas / (Tiempo Funcionamiento * Rate Teórico)
-    # Note: Rate Teórico is typically units/minute.
-    capacidad_teorica = tiempo_funcionamiento * rate_teorico
+    capacidad_teorica = tiempo_funcionamiento * (rate_teorico / 60) # u/h convertido a u/min
     rendimiento = (producido / capacidad_teorica) if capacidad_teorica > 0 else 0
 
-    # 5. Calidad: (Unidades Producidas - Rechazos) / Unidades Producidas
-    calidad = ((producido - rechazos) / producido) if producido > 0 else 0
+    # Nuevos cálculos solicitados
+    scrap_pct = (scrap / producido) if producido > 0 else 0
+    ftt = ((producido - scrap) / producido) if producido > 0 else 0
 
-    # 6. OEE
+    calidad = ftt # Matemáticamente es lo mismo para el OEE
     oee = disponibilidad * rendimiento * calidad
 
     return {
         "tiempo_muerto": tiempo_muerto,
         "tiempo_funcionamiento": tiempo_funcionamiento,
-        "disponibilidad": disponibilidad * 100, # Convertir a porcentaje
+        "disponibilidad": disponibilidad * 100,
         "rendimiento": rendimiento * 100,
         "calidad": calidad * 100,
-        "oee": oee * 100
+        "oee": oee * 100,
+        "scrap_pct": scrap_pct * 100,
+        "ftt": ftt * 100
     }
 
 # --- SIDEBAR ---
 with st.sidebar:
-    try:
-        st.image("EA_2.png", width=200)
-    except:
-        st.title("EA System")
+    try: st.image("EA_2.png", width=200)
+    except: st.title("EA System")
 
     st.markdown("### ⚙️ Configuración Global")
-
-    # Meta OEE Slider
     meta_oee = st.number_input("🎯 Meta OEE (%)", min_value=0.0, max_value=100.0, value=85.0, step=1.0)
+    filter_date_range = st.date_input("📅 Rango de Fechas", [date.today() - timedelta(days=30), date.today()])
 
-    # Filtros Globales (Afectan Dashboard y Reportes)
-    filter_date_range = st.date_input("📅 Rango de Fechas",
-                                    [date.today() - timedelta(days=30), date.today()])
-
-
-    # Obtener líneas dinámicas desde la BD según rango de fechas
+    # Opciones de máquinas dinámicas o por defecto
+    maquinas_opts = list(MAQUINAS_RATES.keys())
     if db and len(filter_date_range) == 2:
-        start_d, end_d = filter_date_range
-        df_lines = db.fetch_records(start_d, end_d)
+        df_lines = db.fetch_records(filter_date_range[0], filter_date_range[1])
+        if not df_lines.empty and 'maquina' in df_lines.columns:
+            maquinas_opts = sorted(list(set(maquinas_opts + df_lines['maquina'].unique().tolist())))
 
-        if not df_lines.empty:
-            lineas_opts = sorted(df_lines['linea'].unique().tolist())
-        else:
-            lineas_opts = []
-    else:
-        lineas_opts = []
-
-    filter_line = st.multiselect(
-        "🏭 Líneas",
-        lineas_opts,
-        default=lineas_opts
-    )
-
-
-    filter_turn = st.multiselect("⏰ Turno", ["1er", "2do", "3cer"], default=["1er", "2do", "3cer"])
+    filter_maquina = st.multiselect("🏭 Máquinas", maquinas_opts, default=maquinas_opts)
+    filter_turn = st.multiselect("⏰ Turno", [1, 2, 3], default=[1, 2, 3]) # Ajustado a numérico según CSV
 
     st.markdown("---")
     st.markdown("**Master Engineer Erik Armenta**")
@@ -152,9 +123,6 @@ with st.sidebar:
 # --- MAIN APP ---
 tab1, tab2, tab3 = st.tabs(["📊 Dashboard OEE", "✍️ Captura de Datos", "📄 Reportes y Descargas"])
 
-# -----------------------------------------------------------------------------
-# TAB 1: DASHBOARD
-# -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # TAB 1: DASHBOARD
 # -----------------------------------------------------------------------------
@@ -186,7 +154,7 @@ def make_donut(input_response, input_text, input_color):
                         legend=None),
     ).properties(width=180, height=180)
 
-    text = plot.mark_text(align='center', color="#29b5e8", font="Lato", fontSize=28, fontWeight=700, fontStyle="italic").encode(text=alt.value(f'{input_response:.2f}%'))
+    text = plot.mark_text(align='center', color=chart_color[0], font="Lato", fontSize=28, fontWeight=700, fontStyle="italic").encode(text=alt.value(f'{input_response:.2f}%'))
     plot_bg = alt.Chart(source_bg).mark_arc(innerRadius=60, cornerRadius=20).encode(
         theta="% value",
         color= alt.Color("Topic:N",
@@ -198,7 +166,7 @@ def make_donut(input_response, input_text, input_color):
     return plot_bg + plot + text
 
 with tab1:
-    st.title("📊 Dashboard OEE en Tiempo Real")
+    st.title("📊 Dashboard Rotarys en Tiempo Real")
 
     if not db:
         st.error("⚠️ Error de conexión: No se encontraron credenciales de Supabase en 'secrets.toml'.")
@@ -210,32 +178,34 @@ with tab1:
             raw_df = db.fetch_records(start_d, end_d)
 
             if not raw_df.empty:
-                # Apply Filters
+                # Apply Filters (Adaptado a Máquinas)
                 df = raw_df[
-                    (raw_df['linea'].isin(filter_line)) &
+                    (raw_df['maquina'].isin(filter_maquina)) &
                     (raw_df['turno'].isin(filter_turn))
                 ]
 
                 if not df.empty:
-                    # --- NUEVA LÓGICA CORRECTA PARA KPI GLOBALES (CÁLCULO HORIZONTAL) ---
+                    # --- LÓGICA CORRECTA PARA KPI GLOBALES (CÁLCULO HORIZONTAL) ---
                     total_tiempo_prog = df['tiempo_programado_min'].sum()
                     total_tiempo_muerto = df['tiempo_muerto'].sum()
                     total_producido = df['producido'].sum()
 
                     # Para el esperado, sumamos la capacidad teórica de cada registro individualmente
                     total_esperado = (df['tiempo_funcionamiento'] * (df['rate_teorico'] / 60)).sum()
-                    total_rechazos = df['rechazos_fugas'].sum()
+                    total_scrap = df['scrap'].sum()
 
                     # Calculamos componentes globales
                     disp_g = ((total_tiempo_prog - total_tiempo_muerto) / total_tiempo_prog) if total_tiempo_prog > 0 else 0
                     perf_g = (total_producido / total_esperado) if total_esperado > 0 else 0
-                    qual_g = ((total_producido - total_rechazos) / total_producido) if total_producido > 0 else 0
+                    ftt_g = ((total_producido - total_scrap) / total_producido) if total_producido > 0 else 0
+                    scrap_g = (total_scrap / total_producido) if total_producido > 0 else 0
 
                     # Asignación a variables para las donas y métricas
-                    kpi_oee = (disp_g * perf_g * qual_g) * 100
+                    kpi_oee = (disp_g * perf_g * ftt_g) * 100
                     kpi_disp = disp_g * 100
                     kpi_perf = perf_g * 100
-                    kpi_qual = qual_g * 100
+                    kpi_ftt = ftt_g * 100
+                    kpi_scrap = scrap_g * 100
 
                     st.markdown("### Indicadores Clave de Rendimiento (KPIs)")
                     col1, col2, col3, col4 = st.columns(4)
@@ -250,8 +220,10 @@ with tab1:
                         st.altair_chart(make_donut(kpi_perf, 'Rendimiento', 'orange'), use_container_width=True)
                         st.metric("Eficiencia / Rendimiento", f"{kpi_perf:.2f}%")
                     with col4:
-                        st.altair_chart(make_donut(kpi_qual, 'Calidad', 'red'), use_container_width=True)
-                        st.metric("Calidad (FTT)", f"{kpi_qual:.2f}%")
+                        st.altair_chart(make_donut(kpi_ftt, 'FTT', 'red'), use_container_width=True)
+                        st.metric("FTT (Calidad)", f"{kpi_ftt:.2f}%")
+                        # Indicador extra para el Scrap en rojo
+                        st.markdown(f"<h4 style='text-align: center; color: #ef4444;'>🚨 Scrap Global: {kpi_scrap:.2f}%</h4>", unsafe_allow_html=True)
 
                     st.markdown("---")
 
@@ -261,11 +233,12 @@ with tab1:
                         tm = x['tiempo_muerto'].sum()
                         prod = x['producido'].sum()
                         esp = (x['tiempo_funcionamiento'] * (x['rate_teorico'] / 60)).sum()
-                        rech = x['rechazos_fugas'].sum()
+                        scrp = x['scrap'].sum()
                         d = (tp - tm) / tp if tp > 0 else 0
                         p = prod / esp if esp > 0 else 0
-                        q = (prod - rech) / prod if prod > 0 else 0
-                        return pd.Series({'oee': (d*p*q)*100, 'disp': d*100, 'perf': p*100, 'qual': q*100})
+                        q = (prod - scrp) / prod if prod > 0 else 0
+                        s = scrp / prod if prod > 0 else 0
+                        return pd.Series({'oee': (d*p*q)*100, 'disp': d*100, 'perf': p*100, 'ftt': q*100, 'scrap_pct': s*100})
 
                     # Gráficos de Tendencia
                     c1, c2 = st.columns(2)
@@ -274,8 +247,10 @@ with tab1:
                         # Tendencia Diaria (Agrupada horizontalmente)
                         df_daily = df.groupby('fecha').apply(calc_h_metrics, include_groups=False).reset_index()
                         fig_trend = px.line(df_daily, x='fecha', y='oee', markers=True,
+                                          hover_data={'oee': ':.2f}%', 'ftt': ':.2f}%', 'scrap_pct': ':.2f}%'},
                                           title="Tendencia OEE Diaria (Cálculo Real)", template="plotly_dark")
                         fig_trend.add_hline(y=meta_oee, line_dash="dash", line_color="green", annotation_text=f"Meta {meta_oee}%")
+                        fig_trend.update_traces(line=dict(color="#38bdf8", width=3), marker=dict(size=8))
                         st.plotly_chart(fig_trend, use_container_width=True)
 
                     with c2:
@@ -283,6 +258,7 @@ with tab1:
                         df['mes'] = pd.to_datetime(df['fecha']).dt.strftime('%Y-%m')
                         df_monthly = df.groupby('mes').apply(calc_h_metrics, include_groups=False).reset_index()
                         fig_month = px.bar(df_monthly, x='mes', y='oee',
+                                         hover_data={'oee': ':.2f}%', 'ftt': ':.2f}%', 'scrap_pct': ':.2f}%'},
                                          title="Tendencia OEE Mensual (Cálculo Real)", template="plotly_dark",
                                          color='oee', color_continuous_scale='Blues')
                         fig_month.add_hline(y=meta_oee, line_dash="dash", line_color="green", annotation_text=f"Meta {meta_oee}%")
@@ -292,11 +268,12 @@ with tab1:
                     c3, c4 = st.columns(2)
 
                     with c3:
-                        failure_cols = ['setup_excesivo', 'falla_mecanica', 'falla_electrica',
-                                      'falla_chamber', 'ajuste_no_programado', 'falta_material']
+                        # Actualizado con los contribuidores de Rotarys
+                        failure_cols = ['ajuste', 'falla_mecanica', 'falla_electrica', 'falta_personal', 'falta_material', 'cambio_modelo']
                         failures = df[failure_cols].sum().sort_values(ascending=False).reset_index()
                         failures.columns = ['Falla', 'Minutos']
-                        failures['Acumulado'] = failures['Minutos'].cumsum() / failures['Minutos'].sum() * 100
+                        failures['Acumulado'] = (failures['Minutos'].cumsum() / failures['Minutos'].sum() * 100).fillna(0)
+
                         fig_pareto = make_subplots(specs=[[{"secondary_y": True}]])
                         fig_pareto.add_trace(go.Bar(x=failures['Falla'], y=failures['Minutos'], name="Minutos", marker_color="#ef4444"), secondary_y=False)
                         fig_pareto.add_trace(go.Scatter(x=failures['Falla'], y=failures['Acumulado'], name="% Acumulado", marker_color="#3b82f6"), secondary_y=True)
@@ -304,10 +281,14 @@ with tab1:
                         st.plotly_chart(fig_pareto, use_container_width=True)
 
                     with c4:
-                        # Desglose OEE por Línea (Agrupado horizontalmente)
-                        df_line = df.groupby('linea').apply(calc_h_metrics, include_groups=False).reset_index()
-                        fig_bar = px.bar(df_line, x='linea', y=['disp', 'perf', 'qual'],
-                                    title="Desglose OEE por Línea (Cálculo Real)", barmode='group',
+                        # Desglose OEE por Máquina (Agrupado horizontalmente)
+                        df_mach = df.groupby('maquina').apply(calc_h_metrics, include_groups=False).reset_index()
+
+                        # Renombramos temporalmente para que la leyenda de Plotly se vea más profesional
+                        df_mach_melt = df_mach.rename(columns={'disp': 'Disponibilidad', 'perf': 'Rendimiento', 'ftt': 'FTT'})
+
+                        fig_bar = px.bar(df_mach_melt, x='maquina', y=['Disponibilidad', 'Rendimiento', 'FTT'],
+                                    title="Desglose de KPIs por Máquina", barmode='group',
                                     template="plotly_dark", labels={'value': 'Porcentaje (%)', 'variable': 'KPI'})
                         st.plotly_chart(fig_bar, use_container_width=True)
 
@@ -317,90 +298,88 @@ with tab1:
                 st.info("No se encontraron registros en el rango de fechas seleccionado.")
         else:
             st.info("Seleccione un rango de fechas válido.")
+
 # -----------------------------------------------------------------------------
-# TAB 2: CAPTURA DE DATOS (CORREGIDA)
+# TAB 2: CAPTURA DE DATOS
 # -----------------------------------------------------------------------------
 with tab2:
-    st.header("📝 Nuevo Registro OEE")
-    st.markdown("Celdas naranjas del formato Excel original.")
+    st.header("📝 Nuevo Registro Rotarys")
 
-    # Generamos la lista de líneas aquí mismo para asegurar que SL001 a SL033 existan
-    lineas_opciones = [f"SL{str(i).zfill(3)}" for i in range(1, 34)]
+    # 1. PARÁMETROS DINÁMICOS (Fuera del form para que actualicen en tiempo real)
+    col_dyn1, col_dyn2 = st.columns(2)
+    with col_dyn1:
+        f_maquina = st.selectbox("🏭 Seleccionar Máquina", list(MAQUINAS_RATES.keys()))
+    with col_dyn2:
+        f_rate = MAQUINAS_RATES[f_maquina]
+        # Mostrar el rate visualmente de forma inmediata
+        st.info(f"⚙️ **Rate Teórico Automático:** `{f_rate} u/h`")
 
-    if not db:
-        st.warning("⚠️ Base de datos no conectada. No se podrán guardar registros.")
-
+    # 2. FORMULARIO DE CAPTURA (Congela el recargo de página hasta guardar)
     with st.form("oee_form", clear_on_submit=True):
+        st.markdown(f"***Capturando datos para: {f_maquina}***")
+
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             f_fecha = st.date_input("Fecha", date.today())
-            # Usamos la lista recién generada
-            f_linea = st.selectbox("Línea", lineas_opciones)
+            f_hora = st.number_input("Hora (0-23)", min_value=0, max_value=23, value=datetime.now().hour)
 
         with col2:
-            f_turno = st.selectbox("Turno", ["1er", "2do", "3cer"])
-            f_modelo = st.text_input("Modelo/Parte")
+            f_turno = st.selectbox("Turno", [1, 2, 3])
+            f_tiempo_prog = st.number_input("Tiempo Programado (min)", min_value=0, value=60) # Asumiendo captura por hora
 
         with col3:
-            f_tiempo_prog = st.number_input("Tiempo Programado (min)", min_value=0, value=480, help="Tiempo Total del Turno")
-            # Nota: El label dice u/h para que el usuario meta el 120, la lógica de cálculo ya debe tener el /60
-            f_rate = st.number_input("Rate Teórico/Eficiencia (u/h)", min_value=0.0, value=1.0, format="%.2f")
+            f_producido = st.number_input("Total Producido", min_value=0)
 
         with col4:
-            f_producido = st.number_input("Total Producido", min_value=0)
-            f_rechazos = st.number_input("Scrap / Rechazos (Cantidad)", min_value=0, help="Cantidad de piezas SCRAP")
+            f_scrap = st.number_input("Scrap (Cantidad)", min_value=0)
 
         st.markdown("#### 🛑 Tiempos Muertos (Minutos)")
         c1, c2, c3, c4, c5, c6 = st.columns(6)
-        with c1: f_setup = st.number_input("Setup Excesivo", min_value=0)
+        with c1: f_ajuste = st.number_input("Ajuste", min_value=0)
         with c2: f_mec = st.number_input("Falla Mecánica", min_value=0)
         with c3: f_elec = st.number_input("Falla Eléctrica", min_value=0)
-        with c4: f_cham = st.number_input("Falla Chamber", min_value=0)
-        with c5: f_ajuste = st.number_input("Ajuste No Prog.", min_value=0)
-        with c6: f_mat = st.number_input("Falta Material", min_value=0)
+        with c4: f_per = st.number_input("Falta Personal", min_value=0)
+        with c5: f_mat = st.number_input("Falta Material", min_value=0)
+        with c6: f_mod = st.number_input("Cambio Modelo", min_value=0)
 
         submitted = st.form_submit_button("💾 Guardar Registro", type="primary")
 
         if submitted:
-            # Calcular Métricas (Asegúrate que tu función calculate_metrics ya divida f_rate entre 60)
-            metrics = calculate_metrics(f_tiempo_prog, f_rate, f_producido, f_rechazos,
-                                     f_setup, f_mec, f_elec, f_cham, f_ajuste, f_mat)
+            # El cálculo usa la variable f_rate que ya se definió dinámicamente arriba
+            metrics = calculate_metrics(f_tiempo_prog, f_rate, f_producido, f_scrap,
+                                     f_ajuste, f_mec, f_elec, f_per, f_mat, f_mod)
 
-            # Preparar Payload
             payload = {
                 "fecha": f_fecha.isoformat(),
-                "linea": f_linea,
+                "hora": f_hora,
                 "turno": f_turno,
-                "modelo": f_modelo,
+                "maquina": f_maquina,
                 "tiempo_programado_min": f_tiempo_prog,
                 "rate_teorico": f_rate,
                 "producido": f_producido,
-                "rechazos_fugas": f_rechazos,
-                "setup_excesivo": f_setup,
+                "scrap": f_scrap,
+                "ajuste": f_ajuste,
                 "falla_mecanica": f_mec,
                 "falla_electrica": f_elec,
-                "falla_chamber": f_cham,
-                "ajuste_no_programado": f_ajuste,
+                "falta_personal": f_per,
                 "falta_material": f_mat,
+                "cambio_modelo": f_mod,
                 "tiempo_muerto": metrics["tiempo_muerto"],
                 "tiempo_funcionamiento": metrics["tiempo_funcionamiento"],
                 "disponibilidad": metrics["disponibilidad"],
                 "rendimiento": metrics["rendimiento"],
-                "calidad": metrics["calidad"],
-                "oee": metrics["oee"]
+                "calidad": metrics["calidad"], # Equivalente a FTT
+                "oee": metrics["oee"],
+                "scrap_pct": metrics["scrap_pct"],
+                "ftt": metrics["ftt"]
             }
 
             if db:
-                res = db.insert_record(payload)
-                if res:
-                    st.success(f"✅ Registro guardado para {f_linea}")
-                    st.info(f"OEE: {metrics['oee']:.2f}% | Rendimiento: {metrics['rendimiento']:.2f}% | Calidad: {metrics['calidad']:.2f}%")
+                if db.insert_record(payload):
+                    st.success(f"✅ Guardado {f_maquina} - FTT: {metrics['ftt']:.2f}% | Scrap: {metrics['scrap_pct']:.2f}%")
                 else:
-                    st.error("❌ Error al guardar en base de datos.")
-            else:
-                st.error("No hay conexión a BD. Datos no guardados.")
-
+                    st.error("❌ Error en BD.")
 
 # -----------------------------------------------------------------------------
 # TAB 3: REPORTES
@@ -438,77 +417,95 @@ with tab3:
         if not raw_df_rep.empty:
             # --- FILTROS ESPECÍFICOS ---
             st.markdown("### 🔍 Refinar Reporte")
-            c_f1, c_f2 = st.columns(2)
+            c_f1 = st.columns(1)[0]
             with c_f1:
-                modelos_disponibles = sorted(raw_df_rep['modelo'].unique().tolist())
-                rep_filter_model = st.multiselect("Filtrar por Modelo", modelos_disponibles, default=modelos_disponibles)
-            with c_f2:
-                turnos_disponibles = ["1er", "2do", "3cer"]
-                rep_filter_turn = st.multiselect("Filtrar por Turno", turnos_disponibles, default=["1er", "2do", "3cer"])
+                turnos_disponibles = [1, 2, 3]
+                rep_filter_turn = st.multiselect("Filtrar por Turno", turnos_disponibles, default=[1, 2, 3])
 
-            # Aplicar filtros
+            # Aplicar filtros (Usando máquinas del sidebar y turnos refinados)
             df_rep = raw_df_rep[
-                (raw_df_rep['linea'].isin(filter_line)) &
-                (raw_df_rep['turno'].isin(rep_filter_turn)) &
-                (raw_df_rep['modelo'].isin(rep_filter_model))
+                (raw_df_rep['maquina'].isin(filter_maquina)) &
+                (raw_df_rep['turno'].isin(rep_filter_turn))
             ].copy()
 
             if not df_rep.empty:
-                # --- RE-CÁLCULO DE FILAS (Corrección de datos heredados de BD) ---
+                # --- CÁLCULO DE MÉTRICAS GLOBALES DEL REPORTE ---
+                total_prod_rep = df_rep['producido'].sum()
+                total_scrap_rep = df_rep['scrap'].sum()
+
+                ftt_global_rep = ((total_prod_rep - total_scrap_rep) / total_prod_rep * 100) if total_prod_rep > 0 else 0
+                scrap_global_rep = (total_scrap_rep / total_prod_rep * 100) if total_prod_rep > 0 else 0
+
+                # --- RE-CÁLCULO DE FILAS (Garantiza precisión matemática por registro) ---
                 df_rep['tiempo_prog_hrs'] = (df_rep['tiempo_programado_min'] / 60).round(2)
                 df_rep['capacidad_real'] = df_rep['tiempo_funcionamiento'] * (df_rep['rate_teorico'] / 60)
 
                 # Recalculamos indicadores individuales para la tabla
+                df_rep['disponibilidad'] = ((df_rep['tiempo_programado_min'] - df_rep['tiempo_muerto']) / df_rep['tiempo_programado_min'] * 100).fillna(0)
                 df_rep['rendimiento'] = (df_rep['producido'] / df_rep['capacidad_real'] * 100).replace([np.inf, -np.inf], 0).fillna(0)
-                df_rep['calidad'] = ((df_rep['producido'] - df_rep['rechazos_fugas']) / df_rep['producido'] * 100).fillna(0)
-                df_rep['oee'] = (df_rep['disponibilidad'] * df_rep['rendimiento'] * df_rep['calidad']) / 10000
+                df_rep['scrap_pct'] = (df_rep['scrap'] / df_rep['producido'] * 100).fillna(0)
+                df_rep['ftt'] = ((df_rep['producido'] - df_rep['scrap']) / df_rep['producido'] * 100).fillna(0)
+                df_rep['oee'] = (df_rep['disponibilidad'] * df_rep['rendimiento'] * df_rep['ftt']) / 10000
 
-                # 1. VISTA DE TABLA
-                vista_tabla = df_rep[['fecha', 'linea', 'turno', 'modelo', 'tiempo_prog_hrs', 'producido', 'disponibilidad', 'rendimiento', 'calidad', 'oee']]
-                cols_kpi = ['disponibilidad', 'rendimiento', 'calidad', 'oee']
+                # --- UI: MOSTRAR RESUMEN GLOBAL ---
+                st.markdown("### 🌎 Resumen Global del Período")
+                c_g1, c_g2, c_g3 = st.columns(3)
+                c_g1.metric("Total Producido", f"{total_prod_rep:,} pzas")
+                c_g2.metric("FTT Global", f"{ftt_global_rep:.2f}%")
+                c_g3.metric("Scrap Global", f"{scrap_global_rep:.2f}%", delta_color="inverse")
+                st.markdown("---")
+
+                # 1. VISTA DE TABLA EN UI
+                vista_tabla = df_rep[['fecha', 'hora', 'turno', 'maquina', 'tiempo_prog_hrs', 'producido', 'scrap', 'scrap_pct', 'ftt', 'disponibilidad', 'rendimiento', 'oee']]
+                cols_kpi = ['scrap_pct', 'ftt', 'disponibilidad', 'rendimiento', 'oee']
                 vista_tabla[cols_kpi] = vista_tabla[cols_kpi].round(2)
 
                 st.subheader("Detalle de Operaciones Individuales")
                 try:
-                    styled_pivot = vista_tabla.style.map(aplicar_semaforo, subset=['oee', 'rendimiento'])
+                    styled_pivot = vista_tabla.style.map(aplicar_semaforo, subset=['oee', 'rendimiento', 'ftt'])
                 except:
-                    styled_pivot = vista_tabla.style.applymap(aplicar_semaforo, subset=['oee', 'rendimiento'])
+                    styled_pivot = vista_tabla.style.applymap(aplicar_semaforo, subset=['oee', 'rendimiento', 'ftt'])
                 st.dataframe(styled_pivot, use_container_width=True)
 
-                # --- 2. LÓGICA DE GRÁFICOS (HORIZONTAL REAL) ---
+                # --- 2. LÓGICA DE GRÁFICOS (HORIZONTAL REAL ACUMULADO) ---
                 def calc_h_report(x):
                     tp = x['tiempo_programado_min'].sum()
                     tm = x['tiempo_muerto'].sum()
                     prod = x['producido'].sum()
                     esp = (x['tiempo_funcionamiento'] * (x['rate_teorico'] / 60)).sum()
-                    rech = x['rechazos_fugas'].sum()
+                    scrp = x['scrap'].sum()
+
                     d = (tp - tm) / tp if tp > 0 else 0
                     p = prod / esp if esp > 0 else 0
-                    q = (prod - rech) / prod if prod > 0 else 0
+                    q = (prod - scrp) / prod if prod > 0 else 0
+
                     return pd.Series({
                         'oee': round((d*p*q)*100, 2),
                         'disponibilidad': round(d*100, 2),
                         'rendimiento': round(p*100, 2),
-                        'calidad': round(q*100, 2)
+                        'ftt': round(q*100, 2),
+                        'scrap_pct': round((scrp / prod * 100) if prod > 0 else 0, 2)
                     })
 
-                # Generar datos agrupados
-                df_line_rep = df_rep.groupby('linea').apply(calc_h_report, include_groups=False).reset_index()
+                # Generar datos agrupados reales
+                df_mach_rep = df_rep.groupby('maquina').apply(calc_h_report, include_groups=False).reset_index()
                 df_daily_rep = df_rep.groupby('fecha').apply(calc_h_report, include_groups=False).reset_index()
 
                 # Gráficas para la UI de Streamlit
                 c1, c2 = st.columns(2)
                 with c1:
-                    fig_bar = px.bar(df_line_rep, x='linea', y='oee', color='oee',
-                                    color_continuous_scale='RdYlGn', title="OEE por Línea (Totales)")
+                    fig_bar = px.bar(df_mach_rep, x='maquina', y='oee', color='oee',
+                                    color_continuous_scale='RdYlGn', title="OEE por Máquina (Totales)",
+                                    hover_data={'oee': ':.2f}%', 'ftt': ':.2f}%', 'scrap_pct': ':.2f}%'})
                     st.plotly_chart(fig_bar, use_container_width=True)
                 with c2:
-                    fig_trend = px.line(df_daily_rep, x='fecha', y='oee', markers=True, title="Tendencia Diaria Real")
+                    fig_trend = px.line(df_daily_rep, x='fecha', y='oee', markers=True, title="Tendencia Diaria Real",
+                                        hover_data={'oee': ':.2f}%', 'ftt': ':.2f}%', 'scrap_pct': ':.2f}%'})
                     st.plotly_chart(fig_trend, use_container_width=True)
 
-                # Pareto de Fallas
+                # Pareto de Fallas actualizado para Rotarys
                 st.subheader("Análisis de Tiempos Muertos")
-                failure_cols = ['setup_excesivo', 'falla_mecanica', 'falla_electrica', 'falla_chamber', 'ajuste_no_programado', 'falta_material']
+                failure_cols = ['ajuste', 'falla_mecanica', 'falla_electrica', 'falta_personal', 'falta_material', 'cambio_modelo']
                 failures_rep = df_rep[failure_cols].sum().sort_values(ascending=False).reset_index()
                 failures_rep.columns = ['Falla', 'Minutos']
                 failures_rep['Acumulado'] = (failures_rep['Minutos'].cumsum() / failures_rep['Minutos'].sum() * 100).fillna(0)
@@ -519,16 +516,31 @@ with tab3:
                 fig_pareto.update_layout(title="Pareto Global de Fallas", template="plotly_dark")
                 st.plotly_chart(fig_pareto, use_container_width=True)
 
-# --- 3. CONSTRUCCIÓN DEL REPORTE HTML (ESTILO FINAL EA INNOVATION) ---
+                # --- 3. CONSTRUCCIÓN DEL REPORTE HTML FINAL ---
                 logo_b64 = get_image_base64("EA_2.png")
-                # El logo ahora tiene posición absoluta para quedarse en la esquina superior izquierda
                 logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="width:120px; position:absolute; top:30px; left:30px;">' if logo_b64 else ""
 
-                # Usamos el HTML de la tabla corregida
                 html_table = styled_pivot.to_html()
 
-                # --- Aplicar Dark Mode Profesional EA a todas las gráficas ---
-                # Dark mode
+                # Tarjetas HTML para el FTT y Scrap Global
+                html_kpis_globales = f"""
+                <div style="display: flex; justify-content: space-around; background-color: #1e293b; padding: 20px; border-radius: 10px; border: 1px solid #334155; margin-bottom: 30px;">
+                    <div>
+                        <h2 style="color: #38bdf8; margin: 0; font-size: 2em;">{total_prod_rep:,}</h2>
+                        <p style="margin: 0; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Total Producido</p>
+                    </div>
+                    <div>
+                        <h2 style="color: #10b981; margin: 0; font-size: 2em;">{ftt_global_rep:.2f}%</h2>
+                        <p style="margin: 0; color: #94a3b8; font-weight: bold; text-transform: uppercase;">FTT Global</p>
+                    </div>
+                    <div>
+                        <h2 style="color: #ef4444; margin: 0; font-size: 2em;">{scrap_global_rep:.2f}%</h2>
+                        <p style="margin: 0; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Scrap Global</p>
+                    </div>
+                </div>
+                """
+
+                # Aplicar Dark Mode a las gráficas del reporte incrustado
                 dark_layout = dict(
                     template="plotly_dark",
                     paper_bgcolor="#0f172a",
@@ -540,19 +552,17 @@ with tab3:
                 fig_trend.update_layout(**dark_layout)
                 fig_pareto.update_layout(**dark_layout)
 
-                # Cambiar línea del gráfico de tendencia a azul EA
                 fig_trend.update_traces(
                     line=dict(color="#38bdf8", width=3),
                     marker=dict(size=6, color="#38bdf8"),
                     mode="lines+markers"
                 )
 
-
                 reporte_completo = f"""
                 <html>
                 <head>
                     <meta charset="utf-8">
-                    <title>Reporte Ejecutivo OEE | EA Innovation</title>
+                    <title>Reporte Ejecutivo OEE Rotarys | EA Innovation</title>
                     <style>
                         body {{
                             background-color: #0f172a;
@@ -571,13 +581,11 @@ with tab3:
                             box-shadow: 0 10px 25px rgba(0,0,0,0.5);
                             border: 1px solid #334155;
                             min-height: 1000px;
-                            position: relative; /* Necesario para el logo absoluto */
+                            position: relative;
                         }}
                         h1 {{ color: #38bdf8; font-size: 2.5em; margin-bottom: 10px; }}
                         h3 {{ color: #94a3b8; border-bottom: 1px solid #334155; padding-bottom: 10px; margin-top: 40px; }}
                         p {{ color: #94a3b8; font-size: 1.2em; margin: 5px 0; }}
-
-                        /* Estilos de Tabla Centrada */
                         table {{
                             width: 100%;
                             border-collapse: collapse;
@@ -599,8 +607,6 @@ with tab3:
                             border-bottom: 1px solid #334155;
                             text-align: center;
                         }}
-
-                        /* Contenedor de Gráficas DarkMode */
                         .chart-container {{
                             background-color: #0f172a;
                             border: 1px solid #334155;
@@ -609,9 +615,7 @@ with tab3:
                             margin: 20px auto;
                             max-width: 100%;
                         }}
-
                         .page-break {{ page-break-before: always; }}
-
                         .footer {{
                             margin-top: 60px;
                             font-size: 0.9em;
@@ -625,15 +629,17 @@ with tab3:
                     <div class="page">
                         {logo_html}
                         <h1>EA Innovation Suite</h1>
-                        <p>Reporte de Desempeño OEE Operativo</p>
-                        <p style="font-size: 1em; opacity: 0.8;">Período: {start_d} al {end_d}</p>
+                        <p>Reporte de Desempeño OEE - Área de Rotarys</p>
+                        <p style="font-size: 1em; opacity: 0.8; margin-bottom: 30px;">Período: {start_d} al {end_d}</p>
 
-                        <h3>Listado Detallado de Operaciones (Horas)</h3>
+                        {html_kpis_globales}
+
+                        <h3>Listado Detallado de Operaciones (Rotarys)</h3>
                         <div style="overflow-x: auto;">
                             {html_table}
                         </div>
 
-                        <h3>Análisis Comparativo por Línea (OEE Acumulado)</h3>
+                        <h3>Análisis Comparativo por Máquina (OEE / FTT / Scrap Acumulado)</h3>
                         <div class="chart-container">
                             {fig_bar.to_html(full_html=False, include_plotlyjs='cdn')}
                         </div>
@@ -647,22 +653,22 @@ with tab3:
 
                     <div class="page">
                         {logo_html}
-                        <h1>Análisis de Tendencias</h1>
-                        <p>Productividad y Eficiencia Acumulada</p>
+                        <h1>Análisis de Tendencias e Interrupciones</h1>
+                        <p>Productividad y Eficiencia de Máquinas</p>
 
                         <h3>Comportamiento Diario del OEE</h3>
                         <div class="chart-container">
                             {fig_trend.to_html(full_html=False, include_plotlyjs=False)}
                         </div>
 
-                        <h3>Pareto Global de Fallas (Minutos)</h3>
+                        <h3>Pareto Global de Tiempos Muertos (Minutos)</h3>
                         <div class="chart-container">
                             {fig_pareto.to_html(full_html=False, include_plotlyjs=False)}
                         </div>
 
                         <div class="footer">
-                            Este reporte es una auditoría técnica de EA Innovation. <br>
-                            La precisión se basa en el cálculo horizontal de totales.
+                            Este reporte constituye una auditoría técnica de EA Innovation. <br>
+                            Cálculos basados en sumatorias horizontales reales de planta.
                         </div>
                     </div>
                 </body>
@@ -670,10 +676,7 @@ with tab3:
                 """
 
                 col1, col2 = st.columns(2)
-                with col1: st.download_button("📊 Descargar Reporte Completo", reporte_completo, f"Reporte_OEE_{start_d}.html", "text/html", use_container_width=True)
-                with col2: st.download_button("📊 Descargar Datos CSV", df_rep.to_csv(index=False).encode('utf-8'), "datos_oee.csv", "text/csv", use_container_width=True)
+                with col1: st.download_button("📊 Descargar Reporte Completo", reporte_completo, f"Reporte_OEE_Rotarys_{start_d}.html", "text/html", use_container_width=True)
+                with col2: st.download_button("📊 Descargar Datos CSV", df_rep.to_csv(index=False).encode('utf-8'), "datos_oee_rotarys.csv", "text/csv", use_container_width=True)
             else:
-                st.warning("No hay datos para estos filtros.")
-
-
-
+                st.warning("No hay datos para los filtros seleccionados.")
