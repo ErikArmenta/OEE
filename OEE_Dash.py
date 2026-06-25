@@ -450,24 +450,15 @@ with tab3:
                 ftt_global_rep = ((total_prod_rep - total_scrap_rep) / total_prod_rep * 100) if total_prod_rep > 0 else 0
                 scrap_global_rep = (total_scrap_rep / total_prod_rep * 100) if total_prod_rep > 0 else 0
 
-                # --- RE-CÁLCULO DE FILAS (Garantiza precisión matemática por registro) ---
+                # --- PREPARACIÓN DE FILAS (Usar datos directos de BD) ---
                 df_rep['tiempo_prog_hrs'] = (df_rep['tiempo_programado_min'] / 60).round(2)
                 
-                # DISPONIBILIDAD
-                df_rep['disponibilidad'] = ((df_rep['tiempo_programado_min'] - df_rep['tiempo_muerto']) / df_rep['tiempo_programado_min'] * 100).fillna(0)
-                
-                # RENDIMIENTO (Producido / Rate)
-                df_rep['rendimiento'] = (df_rep['producido'] / df_rep['rate_teorico'] * 100).replace([np.inf, -np.inf], 0).fillna(0)
-                
-                # SCRAP % (Scrap / Producido)
-                df_rep['scrap_pct'] = (df_rep['scrap'] / df_rep['producido'] * 100).fillna(0)
-                
-                # FTT (Producido / (Producido + Scrap))
-                totales_pzas = df_rep['producido'] + df_rep['scrap']
-                df_rep['ftt'] = (df_rep['producido'] / totales_pzas * 100).fillna(0)
-                
-                # OEE (Disp * Rend * FTT)
-                df_rep['oee'] = (df_rep['disponibilidad'] * df_rep['rendimiento'] * df_rep['ftt']) / 10000
+                # Aseguramos que los nulos sean 0 por si las moscas, pero usamos los valores que YA calculó el TAB 2
+                df_rep['disponibilidad'] = df_rep['disponibilidad'].fillna(0)
+                df_rep['rendimiento'] = df_rep['rendimiento'].fillna(0)
+                df_rep['scrap_pct'] = df_rep['scrap_pct'].fillna(0)
+                df_rep['ftt'] = df_rep['ftt'].fillna(0)
+                df_rep['oee'] = df_rep['oee'].fillna(0)
 
                 # --- UI: MOSTRAR RESUMEN GLOBAL ---
                 st.markdown("### 🌎 Resumen Global del Período")
