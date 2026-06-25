@@ -67,19 +67,21 @@ def init_connection():
 
 db = init_connection()
 
-# --- FUNCIONES DE CÁLCULO (actualizadas según Excel) ---
+# --- FUNCIONES DE CÁLCULO (CORREGIDAS según Excel) ---
 def calculate_metrics(tiempo_programado, rate_teorico, producido, scrap,
                       ajuste, f_mec, f_elec, f_personal, f_mat, c_modelo):
 
     tiempo_muerto = ajuste + f_mec + f_elec + f_personal + f_mat + c_modelo
     tiempo_funcionamiento = max(0, tiempo_programado - tiempo_muerto)
 
+    # Disponibilidad = tiempo_funcionamiento / tiempo_programado
     disponibilidad = (tiempo_funcionamiento / tiempo_programado) if tiempo_programado > 0 else 0
-    capacidad_teorica = tiempo_funcionamiento * (rate_teorico / 60)  # u/min
+
+    # CAPACIDAD TEÓRICA = tiempo_programado * (rate_teorico / 60)  --> como en Excel
+    capacidad_teorica = tiempo_programado * (rate_teorico / 60)
     rendimiento = (producido / capacidad_teorica) if capacidad_teorica > 0 else 0
 
-    # Fórmulas del Excel:
-    # scrap_pct = scrap / producido
+    # Scrap % = scrap / producido
     scrap_pct = (scrap / producido) if producido > 0 else 0
     # FTT y Calidad = producido / (producido + scrap)
     ftt = (producido / (producido + scrap)) if (producido + scrap) > 0 else 0
@@ -400,11 +402,9 @@ with tab3:
                 # --- PREPARACIÓN DE LA TABLA (usando columnas ya existentes) ---
                 df_rep['tiempo_prog_hrs'] = (df_rep['tiempo_programado_min'] / 60).round(2)
 
-                # Seleccionamos las columnas que ya están calculadas en la BD
                 vista_tabla = df_rep[['fecha', 'hora', 'turno', 'maquina', 'tiempo_prog_hrs',
                                       'producido', 'scrap', 'scrap_pct', 'ftt',
                                       'disponibilidad', 'rendimiento', 'oee']].copy()
-                # Redondeamos
                 cols_kpi = ['scrap_pct', 'ftt', 'disponibilidad', 'rendimiento', 'oee']
                 vista_tabla[cols_kpi] = vista_tabla[cols_kpi].round(2)
 
@@ -447,7 +447,7 @@ with tab3:
                                         hover_data={'oee': ':.2f}%', 'ftt': ':.2f}%', 'scrap_pct': ':.2f}%'})
                     st.plotly_chart(fig_trend, use_container_width=True)
 
-                # Pareto de Fallas (sigue igual)
+                # Pareto de Fallas
                 st.subheader("Análisis de Tiempos Muertos")
                 failure_cols = ['ajuste', 'falla_mecanica', 'falla_electrica', 'falta_personal', 'falta_material', 'cambio_modelo']
                 failures_rep = df_rep[failure_cols].sum().sort_values(ascending=False).reset_index()
@@ -460,7 +460,7 @@ with tab3:
                 fig_pareto.update_layout(title="Pareto Global de Fallas", template="plotly_dark")
                 st.plotly_chart(fig_pareto, use_container_width=True)
 
-                # --- REPORTE HTML (con los mismos datos) ---
+                # --- REPORTE HTML ---
                 logo_b64 = get_image_base64("EA_2.png")
                 logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="width:120px; position:absolute; top:30px; left:30px;">' if logo_b64 else ""
 
