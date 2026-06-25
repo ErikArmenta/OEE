@@ -73,18 +73,28 @@ db = init_connection()
 def calculate_metrics(tiempo_programado, rate_teorico, producido, scrap,
                       ajuste, f_mec, f_elec, f_personal, f_mat, c_modelo):
 
+    # N5 = TIEMPO MUERTO TOTAL (Suma de todas las fallas)
     tiempo_muerto = ajuste + f_mec + f_elec + f_personal + f_mat + c_modelo
+    
+    # Tiempo de funcionamiento real (60 - N5)
     tiempo_funcionamiento = max(0, tiempo_programado - tiempo_muerto)
 
-    disponibilidad = (tiempo_funcionamiento / tiempo_programado) if tiempo_programado > 0 else 0
-    capacidad_teorica = tiempo_funcionamiento * (rate_teorico / 60) # u/h convertido a u/min
-    rendimiento = (producido / capacidad_teorica) if capacidad_teorica > 0 else 0
+    # DISPONIBILIDAD: =(60-N5)/60 
+    # (Usamos tiempo_programado asumiendo que siempre entra 60 por ser captura por hora)
+    disponibilidad = (tiempo_programado - tiempo_muerto) / tiempo_programado if tiempo_programado > 0 else 0
 
-    # Nuevos cálculos solicitados
+    # RENDIMIENTO: =E5/F5 (Producido / Rate)
+    rendimiento = (producido / rate_teorico) if rate_teorico > 0 else 0
+
+    # FTT y CALIDAD: =E5/(E5+G5) (Producido / (Producido + Scrap))
+    total_piezas = producido + scrap
+    calidad = (producido / total_piezas) if total_piezas > 0 else 0
+    ftt = calidad # FTT es matemáticamente lo mismo que la Calidad aquí
+
+    # SCRAP %: =G5/E5 (Scrap / Producido)
     scrap_pct = (scrap / producido) if producido > 0 else 0
-    ftt = ((producido - scrap) / producido) if producido > 0 else 0
 
-    calidad = ftt # Matemáticamente es lo mismo para el OEE
+    # OEE: =Q5*R5*S5 (Rendimiento * Disponibilidad * Calidad)
     oee = disponibilidad * rendimiento * calidad
 
     return {
@@ -227,17 +237,21 @@ with tab1:
 
                     st.markdown("---")
 
-                    # --- FUNCIÓN INTERNA PARA CÁLCULO HORIZONTAL EN GRÁFICAS ---
+# --- FUNCIÓN INTERNA PARA CÁLCULO HORIZONTAL EN GRÁFICAS (TAB 1) ---
                     def calc_h_metrics(x):
                         tp = x['tiempo_programado_min'].sum()
                         tm = x['tiempo_muerto'].sum()
                         prod = x['producido'].sum()
-                        esp = (x['tiempo_funcionamiento'] * (x['rate_teorico'] / 60)).sum()
+                        # Sumamos el Rate de todas las horas capturadas
+                        rate_total = x['rate_teorico'].sum() 
                         scrp = x['scrap'].sum()
+                        
+                        # Mismas fórmulas del Excel pero acumuladas
                         d = (tp - tm) / tp if tp > 0 else 0
-                        p = prod / esp if esp > 0 else 0
-                        q = (prod - scrp) / prod if prod > 0 else 0
+                        p = prod / rate_total if rate_total > 0 else 0
+                        q = prod / (prod + scrp) if (prod + scrp) > 0 else 0
                         s = scrp / prod if prod > 0 else 0
+                        
                         return pd.Series({'oee': (d*p*q)*100, 'disp': d*100, 'perf': p*100, 'ftt': q*100, 'scrap_pct': s*100})
 
                     # Gráficos de Tendencia
@@ -467,25 +481,22 @@ with tab3:
                     styled_pivot = vista_tabla.style.applymap(aplicar_semaforo, subset=['oee', 'rendimiento', 'ftt'])
                 st.dataframe(styled_pivot, use_container_width=True)
 
-                # --- 2. LÓGICA DE GRÁFICOS (HORIZONTAL REAL ACUMULADO) ---
-                def calc_h_report(x):
-                    tp = x['tiempo_programado_min'].sum()
-                    tm = x['tiempo_muerto'].sum()
-                    prod = x['producido'].sum()
-                    esp = (x['tiempo_funcionamiento'] * (x['rate_teorico'] / 60)).sum()
-                    scrp = x['scrap'].sum()
-
-                    d = (tp - tm) / tp if tp > 0 else 0
-                    p = prod / esp if esp > 0 else 0
-                    q = (prod - scrp) / prod if prod > 0 else 0
-
-                    return pd.Series({
-                        'oee': round((d*p*q)*100, 2),
-                        'disponibilidad': round(d*100, 2),
-                        'rendimiento': round(p*100, 2),
-                        'ftt': round(q*100, 2),
-                        'scrap_pct': round((scrp / prod * 100) if prod > 0 else 0, 2)
-                    })
+# --- FUNCIÓN INTERNA PARA CÁLCULO HORIZONTAL EN GRÁFICAS (TAB 1) ---
+                    def calc_h_report(x):
+                        tp = x['tiempo_programado_min'].sum()
+                        tm = x['tiempo_muerto'].sum()
+                        prod = x['producido'].sum()
+                        # Sumamos el Rate de todas las horas capturadas
+                        rate_total = x['rate_teorico'].sum() 
+                        scrp = x['scrap'].sum()
+                        
+                        # Mismas fórmulas del Excel pero acumuladas
+                        d = (tp - tm) / tp if tp > 0 else 0
+                        p = prod / rate_total if rate_total > 0 else 0
+                        q = prod / (prod + scrp) if (prod + scrp) > 0 else 0
+                        s = scrp / prod if prod > 0 else 0
+                        
+                        return pd.Series({'oee': (d*p*q)*100, 'disp': d*100, 'perf': p*100, 'ftt': q*100, 'scrap_pct': s*100})
 
                 # Generar datos agrupados reales
                 df_mach_rep = df_rep.groupby('maquina').apply(calc_h_report, include_groups=False).reset_index()
