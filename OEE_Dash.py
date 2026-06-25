@@ -452,13 +452,21 @@ with tab3:
 
                 # --- RE-CÁLCULO DE FILAS (Garantiza precisión matemática por registro) ---
                 df_rep['tiempo_prog_hrs'] = (df_rep['tiempo_programado_min'] / 60).round(2)
-                df_rep['capacidad_real'] = df_rep['tiempo_funcionamiento'] * (df_rep['rate_teorico'] / 60)
-
-                # Recalculamos indicadores individuales para la tabla
+                
+                # DISPONIBILIDAD
                 df_rep['disponibilidad'] = ((df_rep['tiempo_programado_min'] - df_rep['tiempo_muerto']) / df_rep['tiempo_programado_min'] * 100).fillna(0)
-                df_rep['rendimiento'] = (df_rep['producido'] / df_rep['capacidad_real'] * 100).replace([np.inf, -np.inf], 0).fillna(0)
+                
+                # RENDIMIENTO (Producido / Rate)
+                df_rep['rendimiento'] = (df_rep['producido'] / df_rep['rate_teorico'] * 100).replace([np.inf, -np.inf], 0).fillna(0)
+                
+                # SCRAP % (Scrap / Producido)
                 df_rep['scrap_pct'] = (df_rep['scrap'] / df_rep['producido'] * 100).fillna(0)
-                df_rep['ftt'] = ((df_rep['producido'] - df_rep['scrap']) / df_rep['producido'] * 100).fillna(0)
+                
+                # FTT (Producido / (Producido + Scrap))
+                totales_pzas = df_rep['producido'] + df_rep['scrap']
+                df_rep['ftt'] = (df_rep['producido'] / totales_pzas * 100).fillna(0)
+                
+                # OEE (Disp * Rend * FTT)
                 df_rep['oee'] = (df_rep['disponibilidad'] * df_rep['rendimiento'] * df_rep['ftt']) / 10000
 
                 # --- UI: MOSTRAR RESUMEN GLOBAL ---
@@ -481,22 +489,22 @@ with tab3:
                     styled_pivot = vista_tabla.style.applymap(aplicar_semaforo, subset=['oee', 'rendimiento', 'ftt'])
                 st.dataframe(styled_pivot, use_container_width=True)
 
-# --- FUNCIÓN INTERNA PARA CÁLCULO HORIZONTAL EN GRÁFICAS (TAB 1) ---
-                    def calc_h_report(x):
-                        tp = x['tiempo_programado_min'].sum()
-                        tm = x['tiempo_muerto'].sum()
-                        prod = x['producido'].sum()
-                        # Sumamos el Rate de todas las horas capturadas
-                        rate_total = x['rate_teorico'].sum() 
-                        scrp = x['scrap'].sum()
-                        
-                        # Mismas fórmulas del Excel pero acumuladas
-                        d = (tp - tm) / tp if tp > 0 else 0
-                        p = prod / rate_total if rate_total > 0 else 0
-                        q = prod / (prod + scrp) if (prod + scrp) > 0 else 0
-                        s = scrp / prod if prod > 0 else 0
-                        
-                        return pd.Series({'oee': (d*p*q)*100, 'disp': d*100, 'perf': p*100, 'ftt': q*100, 'scrap_pct': s*100})
+                # --- FUNCIÓN INTERNA PARA CÁLCULO HORIZONTAL EN GRÁFICAS (TAB 3) ---
+                def calc_h_report(x):
+                    tp = x['tiempo_programado_min'].sum()
+                    tm = x['tiempo_muerto'].sum()
+                    prod = x['producido'].sum()
+                    # Sumamos el Rate de todas las horas capturadas
+                    rate_total = x['rate_teorico'].sum() 
+                    scrp = x['scrap'].sum()
+                    
+                    # Mismas fórmulas del Excel pero acumuladas
+                    d = (tp - tm) / tp if tp > 0 else 0
+                    p = prod / rate_total if rate_total > 0 else 0
+                    q = prod / (prod + scrp) if (prod + scrp) > 0 else 0
+                    s = scrp / prod if prod > 0 else 0
+                    
+                    return pd.Series({'oee': (d*p*q)*100, 'disp': d*100, 'perf': p*100, 'ftt': q*100, 'scrap_pct': s*100})
 
                 # Generar datos agrupados reales
                 df_mach_rep = df_rep.groupby('maquina').apply(calc_h_report, include_groups=False).reset_index()
