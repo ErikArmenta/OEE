@@ -67,24 +67,34 @@ def init_connection():
 
 db = init_connection()
 
-# --- FUNCIONES DE CÁLCULO (CORREGIDAS según Excel) ---
-def calculate_metrics(tiempo_programado, rate_teorico, producido, scrap,
+# --- FUNCIONES DE CÁLCULO (CORREGIDAS según Excel y con contribuidores de scrap) ---
+def calculate_metrics(tiempo_programado, rate_teorico, producido,
+                      scrap_setup, scrap_pruebas, scrap_msf, scrap_tubo,
+                      scrap_soldadura_quemada, scrap_ajuste, scrap_soldadura_porosa,
+                      scrap_falta_soldadura, scrap_primera_pieza,
                       ajuste, f_mec, f_elec, f_personal, f_mat, c_modelo):
+    """
+    Calcula los KPIs de OEE.
+    El scrap total es la suma de los 9 contribuidores.
+    """
+    # Suma de todos los contribuidores de scrap
+    scrap_total = (scrap_setup + scrap_pruebas + scrap_msf + scrap_tubo +
+                   scrap_soldadura_quemada + scrap_ajuste + scrap_soldadura_porosa +
+                   scrap_falta_soldadura + scrap_primera_pieza)
 
     tiempo_muerto = ajuste + f_mec + f_elec + f_personal + f_mat + c_modelo
     tiempo_funcionamiento = max(0, tiempo_programado - tiempo_muerto)
 
-    # Disponibilidad = tiempo_funcionamiento / tiempo_programado
     disponibilidad = (tiempo_funcionamiento / tiempo_programado) if tiempo_programado > 0 else 0
 
-    # CAPACIDAD TEÓRICA = tiempo_programado * (rate_teorico / 60)  --> como en Excel
+    # Capacidad teórica = tiempo_programado * (rate_teorico / 60)  --> como en Excel
     capacidad_teorica = tiempo_programado * (rate_teorico / 60)
     rendimiento = (producido / capacidad_teorica) if capacidad_teorica > 0 else 0
 
-    # Scrap % = scrap / producido
-    scrap_pct = (scrap / producido) if producido > 0 else 0
-    # FTT y Calidad = producido / (producido + scrap)
-    ftt = (producido / (producido + scrap)) if (producido + scrap) > 0 else 0
+    # Scrap % = scrap_total / producido
+    scrap_pct = (scrap_total / producido) if producido > 0 else 0
+    # FTT y Calidad = producido / (producido + scrap_total)
+    ftt = (producido / (producido + scrap_total)) if (producido + scrap_total) > 0 else 0
     calidad = ftt
 
     oee = disponibilidad * rendimiento * calidad
@@ -97,7 +107,8 @@ def calculate_metrics(tiempo_programado, rate_teorico, producido, scrap,
         "calidad": calidad * 100,
         "oee": oee * 100,
         "scrap_pct": scrap_pct * 100,
-        "ftt": ftt * 100
+        "ftt": ftt * 100,
+        "scrap_total": scrap_total
     }
 
 # --- SIDEBAR ---
@@ -184,7 +195,7 @@ with tab1:
                 ]
 
                 if not df.empty:
-                    # --- KPIs GLOBALES (PROMEDIO DE LOS VALORES INDIVIDUALES) ---
+                    # --- KPIs GLOBALES (PROMEDIO) ---
                     kpi_oee = df['oee'].mean()
                     kpi_disp = df['disponibilidad'].mean()
                     kpi_perf = df['rendimiento'].mean()
@@ -210,7 +221,7 @@ with tab1:
 
                     st.markdown("---")
 
-                    # --- FUNCIÓN PARA AGRUPAR PROMEDIOS (sin recalcular) ---
+                    # --- FUNCIÓN PARA AGRUPAR PROMEDIOS ---
                     def avg_metrics(x):
                         return pd.Series({
                             'oee': x['oee'].mean(),
@@ -220,7 +231,7 @@ with tab1:
                             'scrap_pct': x['scrap_pct'].mean()
                         })
 
-                    # Gráficos de Tendencia
+                    # Gráficos de Tendencia (existentes)
                     c1, c2 = st.columns(2)
 
                     with c1:
@@ -230,7 +241,7 @@ with tab1:
                                           title="Tendencia OEE Diaria (Promedio)", template="plotly_dark")
                         fig_trend.add_hline(y=meta_oee, line_dash="dash", line_color="green", annotation_text=f"Meta {meta_oee}%")
                         fig_trend.update_traces(line=dict(color="#38bdf8", width=3), marker=dict(size=8))
-                        st.plotly_chart(fig_trend, use_container_width=True)
+                        st.plotly_chart(fig_trend, use_container_width=True, key="tab1_trend_oee")
 
                     with c2:
                         df['mes'] = pd.to_datetime(df['fecha']).dt.strftime('%Y-%m')
@@ -240,9 +251,61 @@ with tab1:
                                          title="Tendencia OEE Mensual (Promedio)", template="plotly_dark",
                                          color='oee', color_continuous_scale='Blues')
                         fig_month.add_hline(y=meta_oee, line_dash="dash", line_color="green", annotation_text=f"Meta {meta_oee}%")
-                        st.plotly_chart(fig_month, use_container_width=True)
+                        st.plotly_chart(fig_month, use_container_width=True, key="tab1_trend_month")
 
-                    # Pareto y Desglose
+                    # --- NUEVAS GRÁFICAS: TENDENCIA DIARIA Y MENSUAL DE OEE, FTT Y SCRAP ---
+                    st.markdown("---")
+                    st.subheader("📈 Tendencia Diaria de OEE, FTT y Scrap")
+                    df_daily_all = df.groupby('fecha').apply(
+                        lambda x: pd.Series({
+                            'oee': x['oee'].mean(),
+                            'ftt': x['ftt'].mean(),
+                            'scrap_pct': x['scrap_pct'].mean()
+                        }), include_groups=False
+                    ).reset_index()
+                    fig_trend_all = px.line(df_daily_all, x='fecha', y=['oee', 'ftt', 'scrap_pct'],
+                                            labels={'value': 'Porcentaje (%)', 'variable': 'Métrica'},
+                                            title="Tendencia Diaria - OEE, FTT y Scrap",
+                                            template="plotly_dark",
+                                            color_discrete_map={'oee': '#38bdf8', 'ftt': '#10b981', 'scrap_pct': '#ef4444'})
+                    fig_trend_all.update_traces(mode='lines+markers', marker=dict(size=6))
+                    st.plotly_chart(fig_trend_all, use_container_width=True, key="tab1_trend_all")
+
+                    st.subheader("📈 Tendencia Mensual de OEE, FTT y Scrap")
+                    df_monthly_all = df.groupby('mes').apply(
+                        lambda x: pd.Series({
+                            'oee': x['oee'].mean(),
+                            'ftt': x['ftt'].mean(),
+                            'scrap_pct': x['scrap_pct'].mean()
+                        }), include_groups=False
+                    ).reset_index()
+                    fig_month_all = px.bar(df_monthly_all, x='mes', y=['oee', 'ftt', 'scrap_pct'],
+                                           barmode='group',
+                                           labels={'value': 'Porcentaje (%)', 'variable': 'Métrica'},
+                                           title="Tendencia Mensual - OEE, FTT y Scrap",
+                                           template="plotly_dark",
+                                           color_discrete_map={'oee': '#38bdf8', 'ftt': '#10b981', 'scrap_pct': '#ef4444'})
+                    st.plotly_chart(fig_month_all, use_container_width=True, key="tab1_month_all")
+
+                    # --- TOP 5 MÁQUINAS CON PEOR OEE ---
+                    st.markdown("---")
+                    st.subheader("🏆 Top 5 Máquinas con Peor OEE (Promedio)")
+                    df_mach_oee = df.groupby('maquina').apply(
+                        lambda x: pd.Series({'oee': x['oee'].mean()}), include_groups=False
+                    ).reset_index().sort_values('oee', ascending=True).head(5)
+                    if not df_mach_oee.empty:
+                        fig_top5 = px.bar(df_mach_oee, x='oee', y='maquina', orientation='h',
+                                          color='oee', color_continuous_scale='RdYlGn_r',
+                                          title="Top 5 Peor OEE por Máquina",
+                                          labels={'oee': 'OEE Promedio (%)', 'maquina': 'Máquina'},
+                                          template="plotly_dark")
+                        fig_top5.update_layout(coloraxis_colorbar=dict(title="OEE %"))
+                        st.plotly_chart(fig_top5, use_container_width=True, key="tab1_top5")
+                    else:
+                        st.info("No hay suficientes datos para mostrar el top 5.")
+
+                    # Pareto de Tiempos Muertos y Pareto de Scrap (existentes)
+                    st.markdown("---")
                     c3, c4 = st.columns(2)
 
                     with c3:
@@ -255,15 +318,35 @@ with tab1:
                         fig_pareto.add_trace(go.Bar(x=failures['Falla'], y=failures['Minutos'], name="Minutos", marker_color="#ef4444"), secondary_y=False)
                         fig_pareto.add_trace(go.Scatter(x=failures['Falla'], y=failures['Acumulado'], name="% Acumulado", marker_color="#3b82f6"), secondary_y=True)
                         fig_pareto.update_layout(title="Pareto de Tiempo Muerto (Minutos)", template="plotly_dark")
-                        st.plotly_chart(fig_pareto, use_container_width=True)
+                        st.plotly_chart(fig_pareto, use_container_width=True, key="tab1_pareto_time")
 
                     with c4:
-                        df_mach = df.groupby('maquina').apply(avg_metrics, include_groups=False).reset_index()
-                        df_mach_melt = df_mach.rename(columns={'disp': 'Disponibilidad', 'perf': 'Rendimiento', 'ftt': 'FTT'})
-                        fig_bar = px.bar(df_mach_melt, x='maquina', y=['Disponibilidad', 'Rendimiento', 'FTT'],
-                                    title="Desglose de KPIs por Máquina (Promedio)", barmode='group',
-                                    template="plotly_dark", labels={'value': 'Porcentaje (%)', 'variable': 'KPI'})
-                        st.plotly_chart(fig_bar, use_container_width=True)
+                        # Pareto de contribuyentes de scrap
+                        scrap_cols = ['scrap_setup', 'scrap_pruebas', 'scrap_msf', 'scrap_tubo',
+                                      'scrap_soldadura_quemada', 'scrap_ajuste', 'scrap_soldadura_porosa',
+                                      'scrap_falta_soldadura', 'scrap_primera_pieza']
+                        # Asegurar que existan todas las columnas
+                        for col in scrap_cols:
+                            if col not in df.columns:
+                                df[col] = 0
+                        scrap_contrib = df[scrap_cols].sum().sort_values(ascending=False).reset_index()
+                        scrap_contrib.columns = ['Causa', 'Cantidad']
+                        scrap_contrib['Acumulado'] = (scrap_contrib['Cantidad'].cumsum() / scrap_contrib['Cantidad'].sum() * 100).fillna(0)
+
+                        fig_pareto_scrap = make_subplots(specs=[[{"secondary_y": True}]])
+                        fig_pareto_scrap.add_trace(go.Bar(x=scrap_contrib['Causa'], y=scrap_contrib['Cantidad'], name="Piezas", marker_color="#f59e0b"), secondary_y=False)
+                        fig_pareto_scrap.add_trace(go.Scatter(x=scrap_contrib['Causa'], y=scrap_contrib['Acumulado'], name="% Acumulado", marker_color="#3b82f6"), secondary_y=True)
+                        fig_pareto_scrap.update_layout(title="Pareto de Causas de Scrap (Piezas)", template="plotly_dark")
+                        st.plotly_chart(fig_pareto_scrap, use_container_width=True, key="tab1_pareto_scrap")
+
+                    # Desglose de KPIs por máquina (existente)
+                    st.markdown("---")
+                    df_mach = df.groupby('maquina').apply(avg_metrics, include_groups=False).reset_index()
+                    df_mach_melt = df_mach.rename(columns={'disp': 'Disponibilidad', 'perf': 'Rendimiento', 'ftt': 'FTT'})
+                    fig_bar = px.bar(df_mach_melt, x='maquina', y=['Disponibilidad', 'Rendimiento', 'FTT'],
+                                title="Desglose de KPIs por Máquina (Promedio)", barmode='group',
+                                template="plotly_dark", labels={'value': 'Porcentaje (%)', 'variable': 'KPI'})
+                    st.plotly_chart(fig_bar, use_container_width=True, key="tab1_kpi_desglose")
 
                 else:
                     st.warning("No hay datos para los filtros seleccionados.")
@@ -273,7 +356,7 @@ with tab1:
             st.info("Seleccione un rango de fechas válido.")
 
 # -----------------------------------------------------------------------------
-# TAB 2: CAPTURA DE DATOS
+# TAB 2: CAPTURA DE DATOS (con contribuidores de scrap y hora en lista desplegable)
 # -----------------------------------------------------------------------------
 with tab2:
     st.header("📝 Nuevo Registro Rotarys")
@@ -292,7 +375,14 @@ with tab2:
 
         with col1:
             f_fecha = st.date_input("Fecha", date.today())
-            f_hora = st.number_input("Hora (0-23)", min_value=0, max_value=23, value=datetime.now().hour)
+            # Hora en lista desplegable de 6:00 a 23:00
+            opciones_hora = [f"{i}:00" for i in range(6, 24)]
+            hora_actual = datetime.now().hour
+            if hora_actual < 6 or hora_actual > 23:
+                hora_actual = 6
+            default_index = opciones_hora.index(f"{hora_actual}:00")
+            f_hora_str = st.selectbox("Hora", opciones_hora, index=default_index)
+            f_hora = int(f_hora_str.split(":")[0])
 
         with col2:
             f_turno = st.selectbox("Turno", [1, 2, 3])
@@ -302,7 +392,23 @@ with tab2:
             f_producido = st.number_input("Total Producido", min_value=0)
 
         with col4:
-            f_scrap = st.number_input("Scrap (Cantidad)", min_value=0)
+            st.markdown("#### 📊 Scrap Total (calculado)")
+            scrap_total_display = st.empty()
+
+        st.markdown("#### 🧩 Desglose de Scrap (Piezas)")
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            f_scrap_setup = st.number_input("Ajuste Set Up", min_value=0, value=0, step=1)
+            f_scrap_pruebas = st.number_input("Pruebas Destructivas", min_value=0, value=0, step=1)
+            f_scrap_msf = st.number_input("MSF/PNUT Quemados", min_value=0, value=0, step=1)
+        with sc2:
+            f_scrap_tubo = st.number_input("Tubo Quemado", min_value=0, value=0, step=1)
+            f_scrap_soldadura_quemada = st.number_input("Soldadura Quemada", min_value=0, value=0, step=1)
+            f_scrap_ajuste = st.number_input("Ajuste (scrap)", min_value=0, value=0, step=1)
+        with sc3:
+            f_scrap_soldadura_porosa = st.number_input("Soldadura Porosa", min_value=0, value=0, step=1)
+            f_scrap_falta_soldadura = st.number_input("Falta de Soldadura", min_value=0, value=0, step=1)
+            f_scrap_primera_pieza = st.number_input("Primera Pieza", min_value=0, value=0, step=1)
 
         st.markdown("#### 🛑 Tiempos Muertos (Minutos)")
         c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -316,8 +422,13 @@ with tab2:
         submitted = st.form_submit_button("💾 Guardar Registro", type="primary")
 
         if submitted:
-            metrics = calculate_metrics(f_tiempo_prog, f_rate, f_producido, f_scrap,
-                                     f_ajuste, f_mec, f_elec, f_per, f_mat, f_mod)
+            metrics = calculate_metrics(
+                f_tiempo_prog, f_rate, f_producido,
+                f_scrap_setup, f_scrap_pruebas, f_scrap_msf, f_scrap_tubo,
+                f_scrap_soldadura_quemada, f_scrap_ajuste, f_scrap_soldadura_porosa,
+                f_scrap_falta_soldadura, f_scrap_primera_pieza,
+                f_ajuste, f_mec, f_elec, f_per, f_mat, f_mod
+            )
 
             payload = {
                 "fecha": f_fecha.isoformat(),
@@ -327,7 +438,16 @@ with tab2:
                 "tiempo_programado_min": f_tiempo_prog,
                 "rate_teorico": f_rate,
                 "producido": f_producido,
-                "scrap": f_scrap,
+                "scrap": metrics["scrap_total"],
+                "scrap_setup": f_scrap_setup,
+                "scrap_pruebas": f_scrap_pruebas,
+                "scrap_msf": f_scrap_msf,
+                "scrap_tubo": f_scrap_tubo,
+                "scrap_soldadura_quemada": f_scrap_soldadura_quemada,
+                "scrap_ajuste": f_scrap_ajuste,
+                "scrap_soldadura_porosa": f_scrap_soldadura_porosa,
+                "scrap_falta_soldadura": f_scrap_falta_soldadura,
+                "scrap_primera_pieza": f_scrap_primera_pieza,
                 "ajuste": f_ajuste,
                 "falla_mecanica": f_mec,
                 "falla_electrica": f_elec,
@@ -351,7 +471,7 @@ with tab2:
                     st.error("❌ Error en BD.")
 
 # -----------------------------------------------------------------------------
-# TAB 3: REPORTES
+# TAB 3: REPORTES (con desglose de scrap y nuevas gráficas)
 # -----------------------------------------------------------------------------
 def aplicar_semaforo(val):
     if val < 70:
@@ -394,18 +514,27 @@ with tab3:
             ].copy()
 
             if not df_rep.empty:
+                # Asegurar que existan las columnas de scrap (por si faltan en registros antiguos)
+                scrap_cols = ['scrap_setup', 'scrap_pruebas', 'scrap_msf', 'scrap_tubo',
+                              'scrap_soldadura_quemada', 'scrap_ajuste', 'scrap_soldadura_porosa',
+                              'scrap_falta_soldadura', 'scrap_primera_pieza']
+                for col in scrap_cols:
+                    if col not in df_rep.columns:
+                        df_rep[col] = 0
+
                 # --- MÉTRICAS GLOBALES (PROMEDIOS) ---
                 ftt_global_rep = df_rep['ftt'].mean()
                 scrap_global_rep = df_rep['scrap_pct'].mean()
                 total_prod_rep = df_rep['producido'].sum()
 
-                # --- PREPARACIÓN DE LA TABLA (usando columnas ya existentes) ---
+                # --- PREPARACIÓN DE LA TABLA (con desglose de scrap) ---
                 df_rep['tiempo_prog_hrs'] = (df_rep['tiempo_programado_min'] / 60).round(2)
 
-                vista_tabla = df_rep[['fecha', 'hora', 'turno', 'maquina', 'tiempo_prog_hrs',
-                                      'producido', 'scrap', 'scrap_pct', 'ftt',
-                                      'disponibilidad', 'rendimiento', 'oee']].copy()
-                cols_kpi = ['scrap_pct', 'ftt', 'disponibilidad', 'rendimiento', 'oee']
+                columnas_tabla = ['fecha', 'hora', 'turno', 'maquina', 'tiempo_prog_hrs',
+                                  'producido', 'scrap'] + scrap_cols + ['scrap_pct', 'ftt',
+                                  'disponibilidad', 'rendimiento', 'oee']
+                vista_tabla = df_rep[columnas_tabla].copy()
+                cols_kpi = ['scrap_pct', 'ftt', 'disponibilidad', 'rendimiento', 'oee'] + scrap_cols
                 vista_tabla[cols_kpi] = vista_tabla[cols_kpi].round(2)
 
                 st.markdown("### 🌎 Resumen Global del Período")
@@ -415,14 +544,15 @@ with tab3:
                 c_g3.metric("Scrap Global (Promedio)", f"{scrap_global_rep:.2f}%", delta_color="inverse")
                 st.markdown("---")
 
-                st.subheader("Detalle de Operaciones Individuales")
+                st.subheader("Detalle de Operaciones Individuales (con desglose de scrap)")
                 try:
                     styled_pivot = vista_tabla.style.map(aplicar_semaforo, subset=['oee', 'rendimiento', 'ftt'])
                 except:
                     styled_pivot = vista_tabla.style.applymap(aplicar_semaforo, subset=['oee', 'rendimiento', 'ftt'])
                 st.dataframe(styled_pivot, use_container_width=True)
 
-                # --- GRÁFICAS (con promedios) ---
+                # --- GRÁFICAS EN STREAMLIT ---
+
                 def avg_metrics_report(x):
                     return pd.Series({
                         'oee': x['oee'].mean(),
@@ -432,23 +562,82 @@ with tab3:
                         'scrap_pct': x['scrap_pct'].mean()
                     })
 
+                # Gráfica OEE por máquina (existente)
                 df_mach_rep = df_rep.groupby('maquina').apply(avg_metrics_report, include_groups=False).reset_index()
+                # Tendencia diaria de OEE (existente)
                 df_daily_rep = df_rep.groupby('fecha').apply(avg_metrics_report, include_groups=False).reset_index()
 
-                c1, c2 = st.columns(2)
-                with c1:
-                    fig_bar = px.bar(df_mach_rep, x='maquina', y='oee', color='oee',
-                                    color_continuous_scale='RdYlGn', title="OEE por Máquina (Promedio)",
-                                    hover_data={'oee': ':.2f}%', 'ftt': ':.2f}%', 'scrap_pct': ':.2f}%'})
-                    st.plotly_chart(fig_bar, use_container_width=True)
-                with c2:
-                    fig_trend = px.line(df_daily_rep, x='fecha', y='oee', markers=True,
-                                        title="Tendencia Diaria (Promedio)",
-                                        hover_data={'oee': ':.2f}%', 'ftt': ':.2f}%', 'scrap_pct': ':.2f}%'})
-                    st.plotly_chart(fig_trend, use_container_width=True)
+                # --- 1. OEE por máquina ---
+                st.subheader("📊 OEE Promedio por Máquina")
+                fig_bar = px.bar(df_mach_rep, x='maquina', y='oee', color='oee',
+                                color_continuous_scale='RdYlGn', title="OEE por Máquina (Promedio)",
+                                hover_data={'oee': ':.2f}%', 'ftt': ':.2f}%', 'scrap_pct': ':.2f}%'})
+                st.plotly_chart(fig_bar, use_container_width=True, key="report_bar")
 
-                # Pareto de Fallas
-                st.subheader("Análisis de Tiempos Muertos")
+                # --- 2. Tendencia diaria de OEE ---
+                st.subheader("📈 Tendencia Diaria de OEE")
+                fig_trend_oee = px.line(df_daily_rep, x='fecha', y='oee', markers=True,
+                                        title="Tendencia Diaria OEE (Promedio)",
+                                        hover_data={'oee': ':.2f}%', 'ftt': ':.2f}%', 'scrap_pct': ':.2f}%'})
+                st.plotly_chart(fig_trend_oee, use_container_width=True, key="report_trend_oee")
+
+                # --- 3. Tendencia diaria de OEE, FTT y Scrap ---
+                st.subheader("📈 Tendencia Diaria de OEE, FTT y Scrap")
+                df_daily_all = df_rep.groupby('fecha').apply(
+                    lambda x: pd.Series({
+                        'oee': x['oee'].mean(),
+                        'ftt': x['ftt'].mean(),
+                        'scrap_pct': x['scrap_pct'].mean()
+                    }), include_groups=False
+                ).reset_index()
+                fig_trend_all = px.line(df_daily_all, x='fecha', y=['oee', 'ftt', 'scrap_pct'],
+                                        labels={'value': 'Porcentaje (%)', 'variable': 'Métrica'},
+                                        title="Tendencia Diaria - OEE, FTT y Scrap",
+                                        template="plotly_dark",
+                                        color_discrete_map={'oee': '#38bdf8', 'ftt': '#10b981', 'scrap_pct': '#ef4444'})
+                fig_trend_all.update_traces(mode='lines+markers', marker=dict(size=6))
+                st.plotly_chart(fig_trend_all, use_container_width=True, key="report_trend_all")
+
+                # --- 4. Tendencia mensual de OEE, FTT y Scrap ---
+                st.subheader("📈 Tendencia Mensual de OEE, FTT y Scrap")
+                df_rep['mes'] = pd.to_datetime(df_rep['fecha']).dt.strftime('%Y-%m')
+                df_monthly_all = df_rep.groupby('mes').apply(
+                    lambda x: pd.Series({
+                        'oee': x['oee'].mean(),
+                        'ftt': x['ftt'].mean(),
+                        'scrap_pct': x['scrap_pct'].mean()
+                    }), include_groups=False
+                ).reset_index()
+                fig_month_all = px.bar(df_monthly_all, x='mes', y=['oee', 'ftt', 'scrap_pct'],
+                                       barmode='group',
+                                       labels={'value': 'Porcentaje (%)', 'variable': 'Métrica'},
+                                       title="Tendencia Mensual - OEE, FTT y Scrap",
+                                       template="plotly_dark",
+                                       color_discrete_map={'oee': '#38bdf8', 'ftt': '#10b981', 'scrap_pct': '#ef4444'})
+                st.plotly_chart(fig_month_all, use_container_width=True, key="report_month_all")
+
+                # --- 5. Top 5 máquinas con peor OEE ---
+                st.subheader("🏆 Top 5 Máquinas con Peor OEE (Promedio)")
+                df_mach_oee_rep = df_rep.groupby('maquina').apply(
+                    lambda x: pd.Series({'oee': x['oee'].mean()}), include_groups=False
+                ).reset_index().sort_values('oee', ascending=True).head(5)
+                if not df_mach_oee_rep.empty:
+                    fig_top5 = px.bar(df_mach_oee_rep, x='oee', y='maquina', orientation='h',
+                                      color='oee', color_continuous_scale='RdYlGn_r',
+                                      title="Top 5 Peor OEE por Máquina",
+                                      labels={'oee': 'OEE Promedio (%)', 'maquina': 'Máquina'},
+                                      template="plotly_dark")
+                    fig_top5.update_layout(coloraxis_colorbar=dict(title="OEE %"))
+                else:
+                    # Crear una figura vacía para evitar errores en el HTML
+                    fig_top5 = go.Figure()
+                    fig_top5.update_layout(title="No hay datos suficientes para mostrar el top 5")
+                st.plotly_chart(fig_top5, use_container_width=True, key="report_top5")
+
+                # --- Pareto de Tiempos Muertos y Pareto de Scrap ---
+                st.subheader("Análisis de Tiempos Muertos y Scrap")
+
+                # Pareto de tiempos muertos
                 failure_cols = ['ajuste', 'falla_mecanica', 'falla_electrica', 'falta_personal', 'falta_material', 'cambio_modelo']
                 failures_rep = df_rep[failure_cols].sum().sort_values(ascending=False).reset_index()
                 failures_rep.columns = ['Falla', 'Minutos']
@@ -457,10 +646,21 @@ with tab3:
                 fig_pareto = make_subplots(specs=[[{"secondary_y": True}]])
                 fig_pareto.add_trace(go.Bar(x=failures_rep['Falla'], y=failures_rep['Minutos'], name="Minutos", marker_color="#ef4444"), secondary_y=False)
                 fig_pareto.add_trace(go.Scatter(x=failures_rep['Falla'], y=failures_rep['Acumulado'], name="% Acumulado", marker_color="#3b82f6"), secondary_y=True)
-                fig_pareto.update_layout(title="Pareto Global de Fallas", template="plotly_dark")
-                st.plotly_chart(fig_pareto, use_container_width=True)
+                fig_pareto.update_layout(title="Pareto Global de Tiempos Muertos", template="plotly_dark")
+                st.plotly_chart(fig_pareto, use_container_width=True, key="report_pareto")
 
-                # --- REPORTE HTML ---
+                # Pareto de Scrap
+                scrap_contrib_rep = df_rep[scrap_cols].sum().sort_values(ascending=False).reset_index()
+                scrap_contrib_rep.columns = ['Causa', 'Piezas']
+                scrap_contrib_rep['Acumulado'] = (scrap_contrib_rep['Piezas'].cumsum() / scrap_contrib_rep['Piezas'].sum() * 100).fillna(0)
+
+                fig_pareto_scrap = make_subplots(specs=[[{"secondary_y": True}]])
+                fig_pareto_scrap.add_trace(go.Bar(x=scrap_contrib_rep['Causa'], y=scrap_contrib_rep['Piezas'], name="Piezas", marker_color="#f59e0b"), secondary_y=False)
+                fig_pareto_scrap.add_trace(go.Scatter(x=scrap_contrib_rep['Causa'], y=scrap_contrib_rep['Acumulado'], name="% Acumulado", marker_color="#3b82f6"), secondary_y=True)
+                fig_pareto_scrap.update_layout(title="Pareto Global de Causas de Scrap", template="plotly_dark")
+                st.plotly_chart(fig_pareto_scrap, use_container_width=True, key="report_pareto_scrap")
+
+                # --- REPORTE HTML (con todas las gráficas incluidas) ---
                 logo_b64 = get_image_base64("EA_2.png")
                 logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="width:120px; position:absolute; top:30px; left:30px;">' if logo_b64 else ""
 
@@ -490,15 +690,18 @@ with tab3:
                     font=dict(color="#f8fafc"),
                 )
 
+                # Aplicar el dark layout a todas las gráficas
                 fig_bar.update_layout(**dark_layout)
-                fig_trend.update_layout(**dark_layout)
+                fig_trend_oee.update_layout(**dark_layout)
+                fig_trend_all.update_layout(**dark_layout)
+                fig_month_all.update_layout(**dark_layout)
+                fig_top5.update_layout(**dark_layout)
                 fig_pareto.update_layout(**dark_layout)
+                fig_pareto_scrap.update_layout(**dark_layout)
 
-                fig_trend.update_traces(
-                    line=dict(color="#38bdf8", width=3),
-                    marker=dict(size=6, color="#38bdf8"),
-                    mode="lines+markers"
-                )
+                # Ajustes visuales adicionales
+                fig_trend_oee.update_traces(line=dict(color="#38bdf8", width=3), marker=dict(size=6))
+                fig_trend_all.update_traces(marker=dict(size=6))
 
                 reporte_completo = f"""
                 <html>
@@ -515,7 +718,7 @@ with tab3:
                             text-align: center;
                         }}
                         .page {{
-                            max-width: 1100px;
+                            max-width: 1200px;
                             margin: 0 auto 50px auto;
                             background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
                             padding: 60px 50px 50px 50px;
@@ -535,17 +738,17 @@ with tab3:
                             background-color: rgba(15, 23, 42, 0.6);
                             border-radius: 10px;
                             overflow: hidden;
-                            font-size: 0.9em;
+                            font-size: 0.8em;
                         }}
                         th {{
                             background-color: #334155;
                             color: #38bdf8;
-                            padding: 15px;
+                            padding: 10px;
                             text-align: center;
                             text-transform: uppercase;
                         }}
                         td {{
-                            padding: 12px;
+                            padding: 8px;
                             border-bottom: 1px solid #334155;
                             text-align: center;
                         }}
@@ -576,14 +779,19 @@ with tab3:
 
                         {html_kpis_globales}
 
-                        <h3>Listado Detallado de Operaciones (Rotarys)</h3>
+                        <h3>Listado Detallado de Operaciones (con desglose de scrap)</h3>
                         <div style="overflow-x: auto;">
                             {html_table}
                         </div>
 
-                        <h3>Análisis Comparativo por Máquina (OEE / FTT / Scrap Promedio)</h3>
+                        <h3>OEE Promedio por Máquina</h3>
                         <div class="chart-container">
                             {fig_bar.to_html(full_html=False, include_plotlyjs='cdn')}
+                        </div>
+
+                        <h3>Tendencia Diaria de OEE</h3>
+                        <div class="chart-container">
+                            {fig_trend_oee.to_html(full_html=False, include_plotlyjs=False)}
                         </div>
 
                         <div class="footer">
@@ -595,17 +803,32 @@ with tab3:
 
                     <div class="page">
                         {logo_html}
-                        <h1>Análisis de Tendencias e Interrupciones</h1>
-                        <p>Productividad y Eficiencia de Máquinas</p>
+                        <h1>Análisis Detallado de Tendencias y Rendimiento</h1>
+                        <p>Comparativa de OEE, FTT y Scrap</p>
 
-                        <h3>Comportamiento Diario del OEE (Promedio)</h3>
+                        <h3>Tendencia Diaria - OEE, FTT y Scrap</h3>
                         <div class="chart-container">
-                            {fig_trend.to_html(full_html=False, include_plotlyjs=False)}
+                            {fig_trend_all.to_html(full_html=False, include_plotlyjs=False)}
+                        </div>
+
+                        <h3>Tendencia Mensual - OEE, FTT y Scrap</h3>
+                        <div class="chart-container">
+                            {fig_month_all.to_html(full_html=False, include_plotlyjs=False)}
+                        </div>
+
+                        <h3>Top 5 Máquinas con Peor OEE</h3>
+                        <div class="chart-container">
+                            {fig_top5.to_html(full_html=False, include_plotlyjs=False)}
                         </div>
 
                         <h3>Pareto Global de Tiempos Muertos (Minutos)</h3>
                         <div class="chart-container">
                             {fig_pareto.to_html(full_html=False, include_plotlyjs=False)}
+                        </div>
+
+                        <h3>Pareto Global de Causas de Scrap (Piezas)</h3>
+                        <div class="chart-container">
+                            {fig_pareto_scrap.to_html(full_html=False, include_plotlyjs=False)}
                         </div>
 
                         <div class="footer">
